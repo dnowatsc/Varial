@@ -72,11 +72,11 @@ def read(name):
     info = c.fetchone()
     if not info:
         raise RuntimeError('Data not found in db: %s' % path)
-    info = literal_eval(info)
+    info = literal_eval(info[0])
     if "root_file_obj_names" in info:
         for key, value in info["root_file_obj_names"].iteritems():
             c.execute(
-                'SELECT data FROM dot_info WHERE path=? AND key=?',
+                'SELECT data FROM dot_root WHERE path=? AND key=?',
                 (path, key)
             )
             obj = c.fetchone()
