@@ -18,6 +18,17 @@ default_colors = [632, 878, 596, 870, 434, 840, 902, 417, 828, 618, 400, 800]
 wrp_sorting_keys = ['analyzer', 'name', 'is_data', 'sample']
 max_open_root_files = 998
 
+def readgittag(logfile = 'GITTAGGER_LOG.txt'):
+    try:
+        with open(logfile) as f:
+            lastline = f.readlines()[-1]
+            latestversion = lastline.split()[0]
+    except (IndexError, IOError):
+        latestversion = 'No_tag'
+    return latestversion
+
+git_tag = readgittag()
+
 
 def logfilename():
     """Generate a logfile name with timestamp."""

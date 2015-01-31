@@ -76,6 +76,8 @@ _save_log = {}
 
 def write(wrp, filename=None, suffices=(), mode='RECREATE'):
     """Writes wrapper to disk, including root objects."""
+    if settings.git_tag: 
+        wrp.git_tag = settings.git_tag
     if not filename:
         filename = wrp.name
     if use_analysis_cwd:
