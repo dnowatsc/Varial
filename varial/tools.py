@@ -17,6 +17,8 @@ import itertools
 import glob
 import os
 import shutil
+import time
+import subprocess
 
 import analysis
 import diskio
@@ -205,6 +207,53 @@ class SampleNormalizer(Tool):
             factor,
             name='Lumi factor'
         )
+
+
+class GitTagger(Tool):
+    can_reuse = False
+
+    def __init__(self, logfilename='GITTAGGER_LOG.txt'):
+        super(GitTagger, self).__init__()
+        self.logfilename = logfilename
+
+    def run(self):
+        if os.system('git diff --quiet') or os.system('git diff --cached --quiet'):
+            os.system('git status')
+            commit_msg = raw_input('Please give commit message (empty := amend commit, NO := no commit): ')
+            if commit_msg == "":
+                previous_commit_msg = subprocess.check_output('git log -1 --pretty=%B', shell=True)
+                previous_commit_msg = previous_commit_msg.replace('\n', '')
+                os.system('git commit -a --amend -m "{0}"'.format(previous_commit_msg))
+
+            elif commit_msg == "NO":
+                pass
+
+            elif commit_msg:
+                with open(self.logfilename, 'a+') as logf:
+                    try:
+                        lastline = logf.readlines()[-1]
+                        latest_tag = lastline.split()[0]
+                        version_split = latest_tag.split('.')
+                        if len(version_split) != 2:
+                            raise NameError('Invalid tag in {0}!'.format(logfilename))
+                        new_subtag = int(version_split[-1])+1
+                        new_tag = version_split[0]+'.'+str(new_subtag)
+                    except IndexError:
+                        print '!!Index Error!!'
+                        new_tag = '1.0'
+                    except ValueError:
+                        raise NameError('Invalid version tag in {0}!'.format(logfilename))
+                    settings.git_tag = new_tag
+                    os.system('git commit -am "%s"' %commit_msg)
+                    os.system('git tag -af "plot_v{0}" -m "Automatically created tag version {0}"'.format(new_tag))
+                    logf.write(time.strftime(new_tag + " %Y%m%dT%H%M%S ",time.localtime()) + commit_msg + '\n')
+
+    # def check_version(self, filename, index=-1):
+    #     filename.seek(0,0)
+    #     try:
+    #         lastline = filename.readlines[index]
+    #     except:
+
 
 
 def mk_rootfile_plotter(name="RootFilePlots",

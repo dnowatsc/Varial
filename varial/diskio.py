@@ -106,6 +106,8 @@ def prepare_filename(wrp, filename):
 
 def write(wrp, filename=None, suffices=(), mode='RECREATE'):
     """Writes wrapper to disk, including root objects."""
+    if settings.git_tag: 
+        wrp.git_tag = settings.git_tag
     filename = prepare_filename(wrp, filename)
     # check for overwriting something
     if filename in _save_log:

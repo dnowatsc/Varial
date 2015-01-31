@@ -21,6 +21,17 @@ wrp_sorting_keys = ['in_file_path', 'is_signal', 'is_data', 'sample']
 max_open_root_files = 998
 use_parallel_chains = True
 
+def readgittag(logfile = 'GITTAGGER_LOG.txt'):
+    try:
+        with open(logfile) as f:
+            lastline = f.readlines()[-1]
+            latestversion = lastline.split()[0]
+    except (IndexError, IOError):
+        latestversion = 'No_tag'
+    return latestversion
+
+git_tag = readgittag()
+
 
 def logfilename():
     """Generate a logfile name with timestamp."""
