@@ -62,7 +62,7 @@ class HistoRenderer(Renderer, wrappers.HistoWrapper):
         super(HistoRenderer, self).__init__(wrp)
         if hasattr(wrp, "draw_option"):
             self.draw_option = wrp.draw_option
-        elif isinstance(self.histo, ROOT.TH2D):
+        elif 'TH2' in wrp.type:
             self.draw_option = "colz"
         elif self.is_data:
             self.draw_option = "E1X0"
@@ -241,12 +241,15 @@ class CanvasBuilder(object):
 
         # for stacks and overlays
         if len(wrps) > 1:
-            if (isinstance(wrps[0], wrappers.StackWrapper)
-                    and not hasattr(wrps[0], 'draw_option')):
-                wrps[0].draw_option = 'hist'
+            if isinstance(wrps[0], wrappers.StackWrapper):
+                if not hasattr(wrps[0], 'draw_option'):
+                    wrps[0].draw_option = 'hist'
                 for w in wrps[1:]:
                     if not hasattr(w, 'draw_option'):
-                        if not w.is_data:  # circles for pseudo-data
+                        if w.is_signal:
+                            w.draw_option = 'hist'
+                            w.histo.SetLineWidth(2)
+                        elif not w.is_data:  # circles for pseudo-data
                             w.draw_option = 'E1X0'
                             w.draw_option_legend = 'p'
                             w.histo.SetMarkerStyle(4)
@@ -367,10 +370,32 @@ import operations as op
 from ROOT import TLegend, TPad, TPaveText
 
 
-class TextBoxDecorator(util.Decorator):
+class TitleBox(util.Decorator):
+    """
+    Draws title-box with TPaveText above canvas window.
+
+    Instanciate with text argument:
+    ``tb = TitleBox(None, text="My funny title")``.
+    """
+    def do_final_cosmetics(self):
+        self.decoratee.do_final_cosmetics()
+
+        titlebox = TPaveText(0.28, 0.94, 0.9, 0.97, "brNDC")
+        titlebox.AddText(self.dec_par.get('text', 'ENTER TEXT FOR TITLEBOX!'))
+        titlebox.SetTextSize(0.042)
+        titlebox.SetFillStyle(0)
+        titlebox.SetBorderSize(0)
+        titlebox.SetTextAlign(13)
+        titlebox.SetMargin(0.0)
+        titlebox.SetFillColor(0)
+        titlebox.Draw("SAME")
+        self.titlebox = titlebox
+
+
+class TextBox(util.Decorator):
     """Draw Textboxes individually by renderer name"""
     def __init__(self, inner, dd=True, **kws):
-        super(TextBoxDecorator, self).__init__(inner, dd, **kws)
+        super(TextBox, self).__init__(inner, dd, **kws)
         self.dec_par.update(kws)
         assert('textbox_dict' in self.dec_par)
 
@@ -432,7 +457,8 @@ class Legend(util.Decorator):
         If self.legend == None, this method will create a default legend and
         store it to self.legend
         """
-        if self.legend: return
+        if self.legend:
+            return
 
         tmp_leg = self.main_pad.BuildLegend(0.1, 0.6, 0.5, 0.8) # get legend entry objects
         entries = self.make_entry_tupels(tmp_leg)
@@ -620,23 +646,4 @@ class BottomPlotRatioSplitErr(BottomPlot):
         self.bottom_hist.Draw(self.dec_par["draw_opt"] + "same")
         self.main_pad.cd()
 
-
-class TitleBox(util.Decorator):
-
-    def make_title(self):
-        return "subclass TitleBox and overwrite get_title()!"
-
-    def do_final_cosmetics(self):
-        self.decoratee.do_final_cosmetics()
-
-        titlebox = TPaveText(0.18, 0.94, 0.9, 0.97, "brNDC")
-        titlebox.AddText(self.make_title())
-        titlebox.SetTextSize(0.045)
-        titlebox.SetFillStyle(0)
-        titlebox.SetBorderSize(0)
-        titlebox.SetTextAlign(13)
-        titlebox.SetMargin(0.0)
-        titlebox.SetFillColor(0)
-        titlebox.Draw("SAME")
-        self.titlebox = titlebox
 

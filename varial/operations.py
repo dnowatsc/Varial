@@ -32,19 +32,34 @@ def iterableize(obj):
         return [obj]
 
 
-def add_wrp_kws(func):
-    """Pops 'wrp_kws' from given keywords and updates returned wrapper."""
+def add_wrp_info(wrp, **kw_funcs):
+    """
+    Updates wrapper with values from keyfunctions.
 
-    @functools.wraps(func)
-    def catch_wrp_kws(*args, **kws):
-        wrp_kws = kws.pop('wrp_kws', {})
-        ret = func(*args, **kws)
-        ret.__dict__.update(wrp_kws)
-        return ret
-    return catch_wrp_kws
+    Example: Set the legend to the filename like this:
+
+    >>> import os
+    >>> w1 = wrappers.Wrapper(name='a_name', file_path='/path/to/my_file.root')
+    >>> w1 = add_wrp_info(w1, legend=lambda w: os.path.basename(w.file_path)[:-5])
+    >>> w1.legend
+    'my_file'
+    """
+    # evaluate
+    kw_args = {}
+    for k, f in kw_funcs.iteritems():
+        val = f(wrp)
+        kw_args[k] = val
+        setattr(wrp, k, val)
+
+    # (need to track history manually)
+    h = history.History('add_wrp_info')
+    h.add_args([wrp.history])
+    h.add_kws(kw_args)
+    wrp.history = h
+
+    return wrp
 
 
-@add_wrp_kws
 @history.track_history
 def stack(wrps):
     """
@@ -90,6 +105,8 @@ def stack(wrps):
             )
         if sample != wrp.sample:                                # add to stack
             sample = ""
+        if wrp.legend:
+            wrp.histo.SetTitle(wrp.legend)
         stk_wrp.Add(wrp.histo)
     if not info:
         raise TooFewWrpsError(
@@ -100,7 +117,6 @@ def stack(wrps):
     return wrappers.StackWrapper(stk_wrp, **info)
 
 
-@add_wrp_kws
 @history.track_history
 def sum(wrps):
     """
@@ -147,7 +163,6 @@ def sum(wrps):
     return wrappers.HistoWrapper(histo, **info)
 
 
-@add_wrp_kws
 @history.track_history
 def diff(wrps):
     """
@@ -175,7 +190,7 @@ def diff(wrps):
     for wrp in wrps:
         if not isinstance(wrp, wrappers.HistoWrapper):
             raise WrongInputError(
-                "sum accepts only HistoWrappers. wrp: "
+                "diff accepts only HistoWrappers. wrp: "
                 + str(wrp)
             )
         if histo:
@@ -192,7 +207,6 @@ def diff(wrps):
     return wrappers.HistoWrapper(histo, **info)
 
 
-@add_wrp_kws
 @history.track_history
 def merge(wrps):
     """
@@ -238,7 +252,6 @@ def merge(wrps):
     return wrappers.HistoWrapper(histo, **info)
 
 
-@add_wrp_kws
 @history.track_history
 def prod(wrps):
     """
@@ -299,7 +312,6 @@ def prod(wrps):
     return wrappers.HistoWrapper(histo, **info)
 
 
-@add_wrp_kws
 @history.track_history
 def div(wrps):
     """
@@ -359,11 +371,10 @@ def div(wrps):
     return wrappers.HistoWrapper(histo, **info)
 
 
-@add_wrp_kws
 @history.track_history
 def lumi(wrp):
     """
-    Applies to HistoWrapper. Returns FloatWrapper.
+    Requires ``lumi`` to be defined on wrp. Returns FloatWrapper.
     
     >>> from ROOT import TH1I
     >>> h1 = TH1I("h1", "", 2, .5, 2.5)
@@ -374,17 +385,15 @@ def lumi(wrp):
     >>> w2.float
     2.0
     """
-    if not isinstance(wrp, wrappers.HistoWrapper):
+    if not hasattr(wrp, 'lumi'):
         raise WrongInputError(
-            "lumi needs argument of type HistoWrapper. histo: "
+            "lumi needs ``lumi`` to be defined on wrp. wrp: "
             + str(wrp)
         )
-
     info = wrp.all_info()
     return wrappers.FloatWrapper(wrp.lumi, **info)
 
 
-@add_wrp_kws
 @history.track_history
 def norm_to_lumi(wrp):
     """
@@ -413,7 +422,6 @@ def norm_to_lumi(wrp):
     return wrappers.HistoWrapper(histo, **info)
 
 
-@add_wrp_kws
 @history.track_history
 def norm_to_integral(wrp, use_bin_width=False):
     """
@@ -444,7 +452,6 @@ def norm_to_integral(wrp, use_bin_width=False):
     return wrappers.HistoWrapper(histo, **info)
 
 
-@add_wrp_kws
 @history.track_history
 def copy(wrp):
     """
@@ -475,7 +482,6 @@ def copy(wrp):
     return wrappers.HistoWrapper(histo, **info)
 
 
-@add_wrp_kws
 @history.track_history
 def rebin(wrp, bin_bounds, norm_by_bin_width=False):
     """
@@ -523,7 +529,6 @@ def rebin(wrp, bin_bounds, norm_by_bin_width=False):
     return wrappers.HistoWrapper(histo, **info)
 
 
-@add_wrp_kws
 @history.track_history
 def trim(wrp, left=True, right=True):
     """
@@ -592,7 +597,6 @@ def trim(wrp, left=True, right=True):
     return rebin(wrp, bin_bounds)
 
 
-@add_wrp_kws
 @history.track_history
 def mv_in(wrp, overflow=True, underflow=True):
     """
@@ -622,7 +626,7 @@ def mv_in(wrp, overflow=True, underflow=True):
     """
     if not isinstance(wrp, wrappers.HistoWrapper):
         raise WrongInputError(
-            "mv_bin needs argument of type HistoWrapper. histo: "
+            "mv_in needs argument of type HistoWrapper. histo: "
             + str(wrp)
         )
     histo = wrp.histo.Clone()
@@ -640,7 +644,6 @@ def mv_in(wrp, overflow=True, underflow=True):
     return wrappers.HistoWrapper(histo, **wrp.all_info())
 
 
-@add_wrp_kws
 @history.track_history
 def integral(wrp, use_bin_width=False):
     """
@@ -662,7 +665,7 @@ def integral(wrp, use_bin_width=False):
     """
     if not isinstance(wrp, wrappers.HistoWrapper):
         raise WrongInputError(
-            "int needs argument of type HistoWrapper. histo: "
+            "integral needs argument of type HistoWrapper. histo: "
             + str(wrp)
         )
     option = "width" if use_bin_width else ""
@@ -670,7 +673,6 @@ def integral(wrp, use_bin_width=False):
     return wrappers.FloatWrapper(wrp.histo.Integral(option), **info)
 
 
-@add_wrp_kws
 @history.track_history
 def int_l(wrp, use_bin_width=False):
     """
@@ -710,7 +712,6 @@ def int_l(wrp, use_bin_width=False):
     return wrappers.HistoWrapper(int_histo, **info)
 
 
-@add_wrp_kws
 @history.track_history
 def int_r(wrp, use_bin_width=False):
     """
@@ -751,7 +752,6 @@ def int_r(wrp, use_bin_width=False):
     return wrappers.HistoWrapper(int_histo, **info)
 
 
-@add_wrp_kws
 @history.track_history
 def chi2(wrps, x_min=0, x_max=0):
     """
@@ -803,7 +803,6 @@ def chi2(wrps, x_min=0, x_max=0):
     )
 
 
-@add_wrp_kws
 @history.track_history
 def eff(wrps, option='cl=0.683 b(1,1) mode'):
     """
@@ -865,6 +864,66 @@ def eff(wrps, option='cl=0.683 b(1,1) mode'):
     graph.GetYaxis().SetTitle('efficiency')
     info = nominator.all_info()
     return wrappers.GraphWrapper(graph, **info)
+
+
+@history.track_history
+def th2_projection(wrp, projection,
+                   name='_p', firstbin=0, lastbin=-1, option='eo'):
+    """
+    Applies to HistoWrapper with TH2 type. Returns HistoWrapper.
+
+    >>> from ROOT import TH2I
+    >>> h1 = TH2I("h1", "", 2, -.5, 1.5, 2, -.5, 1.5)
+    >>> h1.Fill(0,1)
+    9
+    >>> h1.Fill(1,1,2)
+    10
+    >>> h1.Fill(1,0,3)
+    6
+    >>> w1 = wrappers.HistoWrapper(h1)
+    >>> w2 = th2_projection(w1, 'x')
+    >>> w2.histo.GetBinContent(1)
+    1.0
+    >>> w2.histo.GetBinContent(2)
+    5.0
+    >>> w2 = th2_projection(w1, 'y')
+    >>> w2.histo.GetBinContent(1)
+    3.0
+    >>> w2.histo.GetBinContent(2)
+    3.0
+    """
+    projection = projection.lower()
+    if projection not in ('x', 'y'):
+        raise WrongInputError(
+            'th2d_projection needs ``projection`` argument to be one of '
+            '("x", "y"). projection: ' + str(projection)
+        )
+    if not (isinstance(wrp, wrappers.HistoWrapper) and 'TH2' in wrp.type):
+        raise WrongInputError(
+            'th2d_projection needs argument of type HistoWrapper with TH2 type '
+            'histo. Histo: ' + str(wrp)
+        )
+    name += projection
+    th2 = wrp.histo
+    if projection == 'x':
+        histo = th2.ProjectionX(name, firstbin, lastbin, option)
+    else:
+        histo = th2.ProjectionY(name, firstbin, lastbin, option)
+    histo.SetDirectory(0)
+    info = wrp.all_info()
+    info['in_file_path'] = info['in_file_path'][:]
+    info['in_file_path'][-1] += '_p' + projection
+    return wrappers.HistoWrapper(histo, **info)
+
+
+def th2_projection_x(wrp, name='_p', firstbin=0, lastbin=-1, option='eo'):
+    """Proxy for th2_projection."""
+    return th2_projection(wrp, 'x', name, firstbin, lastbin, option)
+
+
+def th2_projection_y(wrp, name='_p', firstbin=0, lastbin=-1, option='eo'):
+    """Proxy for th2_projection."""
+    return th2_projection(wrp, 'y', name, firstbin, lastbin, option)
 
 
 if __name__ == "__main__":

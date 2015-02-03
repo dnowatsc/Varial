@@ -45,6 +45,65 @@ def debug_printer(iterable, print_obj=True):
         yield obj
 
 
+def imap_conditional(iterable, keyfunc, func):
+    """
+    Like itertools.imap, but only applying func if keyfunc evaluates to True. 
+
+    >>> def change_sign(value):
+    ...     return -value
+    >>> def is_even_val(v):
+    ...     return v%2 == 0
+    >>> list(imap_conditional([1, 2, 3, 4, 5, 6, 7], is_even_val, change_sign))
+    [1, -2, 3, -4, 5, -6, 7]
+    """
+    for val in iterable:
+        if keyfunc(val):
+             yield func(val)
+        else:
+             yield val
+
+
+def switch(iterable, keyfunc, generator):
+    """
+    Switches items to go through generator or not.
+
+    The order of items is preserved if ``generator`` does not reshuffle them. 
+    
+    :param iterable:    input iterable
+    :param keyfunc:     function, called with items from iterable. If an item
+                        evaluates to True, the item goes through generator, 
+                        otherwise it's yielded as is.
+    :param generator:   generator function, through with items are passed if 
+                        ``keyfunc`` evaluates to True for them.
+
+    >>> def gen_change_sign(values):
+    ...     for v in values:
+    ...         yield -v
+    >>> def is_even_val(v):
+    ...     return v%2 == 0
+    >>> list(switch([1, 2, 3, 4, 5, 6, 7], is_even_val, gen_change_sign))
+    [1, -2, 3, -4, 5, -6, 7]
+    """
+    passing_queue = []
+
+    def pre(it):
+        for newval in it:
+            if keyfunc(newval):
+                yield newval
+            else:
+                passing_queue.append(newval)
+
+    def post(gen):
+        for gen_val in gen:
+            while passing_queue:            # empty passing items first
+                yield passing_queue.pop(0)
+            yield gen_val
+        while passing_queue:                # empty leftover items
+            yield passing_queue.pop(0)
+
+    return post(generator(pre(iterable)))
+
+
 def consume_n_count(iterable):
     """
     Walks over iterable and counts number of items.
@@ -157,24 +216,28 @@ def interleave(*grouped_wrps):
         yield itertools.chain(*grp)
 
 
-def split_data_mc(wrps):
+def split_data_bkg_sig(wrps):
     """
-    Split stream into data and mc stream.
+    Split stream into data and two mc streams.
+
+    This function splits the wrapper stream into three by the ``is_data`` and 
+    ``is_signal`` attributes of the given wrappers.
 
     :param wrps:        Wrapper iterable
-    :returns:           two wrapper iterators: ``(stream_data, stream_mc)``
+    :returns:           three wrapper iterators: ``(data, bkg, sig)``
     """
-    wrp_a, wrp_b = itertools.tee(wrps)
-    data = itertools.ifilter(lambda w: w.is_data, wrp_a)
-    mcee = itertools.ifilter(lambda w: not w.is_data, wrp_b)
-    return data, mcee
+    wrps_a, wrps_b, wrps_c = itertools.tee(wrps, 3)
+    dat = itertools.ifilter(lambda w: w.is_data, wrps_a)
+    sig = itertools.ifilter(lambda w: w.is_signal, wrps_b)
+    bkg = itertools.ifilter(lambda w: not (w.is_data or w.is_signal), wrps_c)
+    return dat, bkg, sig
 
 
 ################################################################ operations ###
 import operations as op
 
 
-def generate_op(op_func):
+def _generate_op(op_func):
     """
     Transforms an operation with one argument into a generator.
 
@@ -192,11 +255,11 @@ def generate_op(op_func):
     >>> h1.Fill(3)
     2
     >>> w1 = [HistoWrapper(h1, lumi=2.)]
-    >>> gen_lumi = generate_op(op.lumi)
+    >>> gen_lumi = _generate_op(op.lumi)
     >>> w2 = list(gen_lumi(w1))
     >>> w2[0].float
     2.0
-    >>> gen_int = generate_op(op.integral)
+    >>> gen_int = _generate_op(op.integral)
     >>> w3 = list(gen_int(w1))
     >>> w3[0].float
     2.0
@@ -209,22 +272,52 @@ def generate_op(op_func):
             yield op_func(wrp, *args, **kws)
     return gen_op
 
-gen_stack               = generate_op(op.stack)
-gen_sum                 = generate_op(op.sum)
-gen_merge               = generate_op(op.merge)
-gen_prod                = generate_op(op.prod)
-gen_div                 = generate_op(op.div)
-gen_lumi                = generate_op(op.lumi)
-gen_norm_to_lumi        = generate_op(op.norm_to_lumi)
-gen_norm_to_integral    = generate_op(op.norm_to_integral)
-gen_copy                = generate_op(op.copy)
-gen_mv_in               = generate_op(op.mv_in)
-gen_rebin               = generate_op(op.rebin)
-gen_trim                = generate_op(op.trim)
-gen_integral            = generate_op(op.integral)
-gen_int_l               = generate_op(op.int_l)
-gen_int_r               = generate_op(op.int_r)
-gen_eff                 = generate_op(op.eff)
+
+def _generate_op_noex(op_func):
+    """
+    Same as ``_generate_op`` but catches ``op.WrongInputError``.
+
+    >>> from varial.wrappers import FloatWrapper
+    >>> gen_noex_mv_in = _generate_op_noex(op.mv_in)
+    >>> w1 = FloatWrapper(2.0)
+    >>> w2 = list(gen_noex_mv_in([w1]))  # WrongInputError is catched
+    >>> w1 == w2[0]
+    True
+    """
+    def gen_op_noex(wrps, *args, **kws):
+        for wrp in wrps:
+            try:
+                yield op_func(wrp, *args, **kws)
+            except op.WrongInputError:
+                yield wrp
+    return gen_op_noex
+
+
+#TODO: write doc for these into _generate_op and _generate_op_noex
+gen_add_wrp_info        = _generate_op(op.add_wrp_info)
+gen_stack               = _generate_op(op.stack)
+gen_sum                 = _generate_op(op.sum)
+gen_merge               = _generate_op(op.merge)
+gen_prod                = _generate_op(op.prod)
+gen_div                 = _generate_op(op.div)
+gen_lumi                = _generate_op(op.lumi)
+gen_norm_to_lumi        = _generate_op(op.norm_to_lumi)
+gen_norm_to_integral    = _generate_op(op.norm_to_integral)
+gen_copy                = _generate_op(op.copy)
+gen_mv_in               = _generate_op(op.mv_in)
+gen_rebin               = _generate_op(op.rebin)
+gen_trim                = _generate_op(op.trim)
+gen_integral            = _generate_op(op.integral)
+gen_int_l               = _generate_op(op.int_l)
+gen_int_r               = _generate_op(op.int_r)
+gen_eff                 = _generate_op(op.eff)
+gen_th2_projection_x    = _generate_op(op.th2_projection_x)
+gen_th2_projection_y    = _generate_op(op.th2_projection_y)
+
+gen_noex_norm_to_lumi       = _generate_op_noex(op.norm_to_lumi)
+gen_noex_norm_to_integral   = _generate_op_noex(op.norm_to_integral)
+gen_noex_th2_projection_x   = _generate_op_noex(op.th2_projection_x)
+gen_noex_th2_projection_y   = _generate_op_noex(op.th2_projection_y)
 
 
 def gen_norm_to_data_lumi(wrps):
@@ -234,6 +327,79 @@ def gen_norm_to_data_lumi(wrps):
             itertools.repeat(analysis.data_lumi_sum_wrp())
         )
     )
+
+
+def gen_make_eff_graphs(wrps, postfix_sub='_sub', postfix_tot='_tot'):
+    """
+    Makes efficiency graphs and interleaves them into a sorted stream.
+
+    Searches for histgrams ending with ``postfix_sub`` and ``postfix_tot``. On
+    finding a matching pair, it creates an efficiency graph. The graphs are
+    interleaved in a sorted stream without disturbing the order needed for 
+    plotting. 
+
+    :param wrps:        Wrapper iterable
+    :param postfix_sub: str, search token for histograms of passing data,
+                        default: ``_sub``
+    :param postfix_tot: str, search token for histograms of all data,
+                        default: ``_tot``
+    :yields:            Wrapper (simply forwarding), GraphWrapper
+    """
+    token = lambda w: w.legend + ":" + "/".join(w.in_file_path)[:-4]
+    subs, tots = {}, {}
+    res = []
+    for wrp in wrps:
+        yield wrp
+        if wrp.name.endswith(postfix_sub):
+            t = token(wrp)
+            if t in tots:
+                res.append(op.eff((wrp, tots.pop(t))))
+            else:
+                subs[t] = wrp
+        elif wrp.name.endswith(postfix_tot):
+            t = token(wrp)
+            if t in subs:
+                res.append(op.eff((subs.pop(t), wrp)))
+            else:
+                tots[t] = wrp
+        if res and not (subs or tots):
+            for _ in xrange(len(res)):
+                yield res.pop(0)
+
+
+def gen_make_th2_projections(wrps, keep_th2=True):
+    """
+    Makes x- and y-projections of TH2 hists and interleaves them in the stream.
+
+    :param wrps:        Wrapper iterable
+    :param keep_th2:    bool, if False the TH2 hists are dropped.
+    """
+    token = lambda w: "/".join(w.in_file_path)
+    current_token = None
+    x_buf, y_buf = [], []
+
+    for wrp in wrps:
+        if current_token:
+            if token(wrp) != current_token:
+                current_token = None
+                while x_buf:
+                    yield x_buf.pop(0)
+                while y_buf:
+                    yield y_buf.pop(0)
+        if 'TH2' in wrp.type:
+            current_token = token(wrp)
+            x_buf.append(op.th2_projection_x(wrp))
+            y_buf.append(op.th2_projection_y(wrp))
+            if keep_th2:
+                yield wrp
+        else:
+            yield wrp
+
+    while x_buf:
+        yield x_buf.pop(0)
+    while y_buf:
+        yield y_buf.pop(0)
+
 
 
 ############################################################### load / save ###
@@ -442,7 +608,6 @@ def switch_log_scale(cnvs, y_axis=True, x_axis=False):
 
 
 ################################################### application & packaging ###
-from ROOT import TH2D
 
 
 def fs_filter_sort_load(filter_keyfunc=None, sort_keys=None):
@@ -468,7 +633,7 @@ def fs_filter_sort_load(filter_keyfunc=None, sort_keys=None):
 
 def fs_filter_active_sort_load(filter_keyfunc=None, sort_keys=None):
     """
-    Just as fs_filter_sort_load, but also filter for active samples.
+    Just as fs_filter_sort_load, but also filters for active samples.
     """
     wrps = fs_content()
     wrps = filter_active_samples(wrps)
@@ -519,13 +684,14 @@ def mc_stack_n_data_sum(wrps, merge_mc_key_func=None, use_all_data_lumi=False):
     """
     Stacks MC histos and merges data, input needs to be sorted and grouped.
 
-    The output are tuples of MC stacks and data histograms.
-    ATTENTION: This crashes, if the proper histograms are not present!
+    Yields tuples of an MC stack, signal histograms, and a data histogram, if 
+    all kinds of data are present. Raises an exception if no histograms are
+    given at all.
 
     :param wrps:                Iterables of HistoWrapper (grouped)
     :param merge_mc_key_func:   key function for python sorted(...), default
                                 tries to sort after stack position
-    :yields:                    (StackWrapper, HistoWrapper)
+    :yields:                    tuples of wrappers for plotting
     """
     if not merge_mc_key_func:
         merge_mc_key_func = lambda w: analysis.get_stack_position(w.sample)
@@ -533,47 +699,54 @@ def mc_stack_n_data_sum(wrps, merge_mc_key_func=None, use_all_data_lumi=False):
     for grp in wrps:
 
         # split stream
-        data, mc = split_data_mc(grp)
+        dat, bkg, sig = split_data_bkg_sig(grp)
 
-        # sum up data
-        data_sum = None
+        # data
+        dat_sum = None
         try:
-            data_sum = op.sum(data)
+            dat_sum = op.sum(dat)
         except op.TooFewWrpsError:
-            print "INFO generators.mc_stack_n_data_sum(..): "\
-                  "No data histos present! I will yield only mc."
-        if data_sum and not use_all_data_lumi:
-            data_lumi = op.lumi(data_sum)
+            if settings.debug_mode:
+                print 'DEBUG generators.mc_stack_n_data_sum(..): '\
+                      'No data histograms present!'
+        if dat_sum and not use_all_data_lumi:
+            data_lumi = op.lumi(dat_sum)
         else:
             data_lumi = analysis.data_lumi_sum_wrp()
 
-        # merge mc samples (merge also normalizes to lumi = 1.)
-        mc_sorted = sorted(mc, key=merge_mc_key_func)
-        mc_groupd = group(mc_sorted, merge_mc_key_func)
-        mc_merged = (op.merge(g) for g in mc_groupd)
-        mc_colord = apply_fillcolor(mc_merged)
-        is_2d = mc_sorted and isinstance(mc_sorted[0].histo, TH2D)
-
-        # stack mc
-        mc_norm = gen_prod(itertools.izip(mc_colord,
-                                          itertools.repeat(data_lumi)))
-        mc_stck = None
+        # background (op.merge normalizes to lumi = 1.)
+        bkg = sorted(bkg, key=merge_mc_key_func)
+        is_2d = bkg and 'TH2' in bkg[0].type
+        bkg = group(bkg, merge_mc_key_func)
+        bkg = (op.merge(g) for g in bkg)
+        bkg = apply_fillcolor(bkg)
+        bkg = apply_linecolor(bkg, [1])
+        bkg = gen_prod(itertools.izip(bkg, itertools.repeat(data_lumi)))
+        bkg_stk = None
         try:
             if is_2d:
-                mc_stck = op.sum(mc_norm)
+                bkg_stk = op.sum(bkg)
             else:
-                mc_stck = op.stack(mc_norm)
+                bkg_stk = op.stack(bkg)
         except op.TooFewWrpsError:
-            print "INFO generators.mc_stack_n_data_sum(..): " \
-                  "No mc histos present! I will yield only data"
-        if mc_stck and data_sum:
-            yield mc_stck, data_sum
-        elif mc_stck:
-            yield (mc_stck, )
-        elif data_sum:
-            yield (data_sum, )
+            if settings.debug_mode:
+                print 'DEBUG generators.mc_stack_n_data_sum(..): '\
+                      'No background histograms present!'
+
+        # signal
+        sig = apply_linecolor(sig)
+        sig_lst = list(sig)
+        if not sig_lst and settings.debug_mode:
+            print 'DEBUG generators.mc_stack_n_data_sum(..): '\
+                  'No signal histograms present!'
+
+        # return in order for plotting: bkg, signals, data
+        res = [bkg_stk] + sig_lst + [dat_sum]
+        res = tuple(w for w in res if w)
+        if res:
+            yield tuple(res)
         else:
-            raise op.TooFewWrpsError("Neither data nor mc histos present!")
+            raise op.TooFewWrpsError("No histograms present!")
 
 
 def fs_mc_stack_n_data_sum(filter_keyfunc=None, merge_mc_key_func=None):
@@ -581,12 +754,11 @@ def fs_mc_stack_n_data_sum(filter_keyfunc=None, merge_mc_key_func=None):
     The full job to stacked histos and data, directly from fileservice.
 
     The output are tuples of MC stacks and data histograms.
-    ATTENTION: This crashes, if the proper histograms are not present!
 
     :param filter_dict:         see function filter(...) above
     :param merge_mc_key_func:   key function for python sorted(...), default
                                 tries to sort after stack position
-    :yields:                    (StackWrapper, HistoWrapper)
+    :yields:                    tuples of wrappers for plotting
     """
     loaded = fs_filter_active_sort_load(filter_keyfunc)
     grouped = group(loaded)     # default: group by analyzer_histo
