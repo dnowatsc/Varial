@@ -208,13 +208,22 @@ class GitTagger(Tool):
     def run(self):
         if os.system('git diff --quiet') or os.system('git diff --cached --quiet'):
             os.system('git status')
-            commit_msg = raw_input('Please give commit message (empty := amend commit, NO := no commit): ')
+            commit_msg = raw_input('Please give commit message (empty := amend commit, -no := no commit): ')
             if commit_msg == "":
                 previous_commit_msg = subprocess.check_output('git log -1 --pretty=%B', shell=True)
                 previous_commit_msg = previous_commit_msg.replace('\n', '')
                 os.system('git commit -a --amend -m "{0}"'.format(previous_commit_msg))
 
-            elif commit_msg == "NO":
+            elif commit_msg.startswith('-a'):
+                os.system('git commit -a --amend -m "{0}"'.format(commit_msg[3:]))
+                with open(self.logfilename) as readf:
+                    lines = readf.readlines()
+                    latest_tag = lines[-1].split()[0]
+                with open(self.logfilename, "w") as writef:
+                    writef.writelines([item for item in lines[:-1]])
+                    writef.write(time.strftime(latest_tag + " %Y%m%dT%H%M%S ",time.localtime()) + commit_msg[3:] + '\n')
+
+            elif commit_msg == "-no":
                 pass
 
             elif commit_msg:
