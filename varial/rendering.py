@@ -413,7 +413,7 @@ class Legend(util.Decorator):
     The box height is adjusted by the number of legend entries.
     No border or shadow are printed. See __init__ for keywords.
     """
-    def __init__(self, inner, dd = "True", **kws):
+    def __init__(self, inner, dd="True", **kws):
         super(Legend, self).__init__(inner, dd)
         self.dec_par.update(settings.defaults_Legend)
         self.dec_par.update(kws)
@@ -647,3 +647,4 @@ class BottomPlotRatioSplitErr(BottomPlot):
         self.main_pad.cd()
 
 
+# TODO use WrapperWrapper

@@ -16,15 +16,14 @@ def rename_th2(wrps):
     for wrp in wrps:
         if 'TH2' in wrp.type:
             wrp.name += '_' + wrp.legend
-            wrp.in_file_path = wrp.in_file_path[:]
-            wrp.in_file_path[-1] += '_' + wrp.legend
+            wrp.in_file_path += '_' + wrp.legend
         yield wrp
 
 
 def plot_grouper_by_in_file_path(wrps, separate_th2=True):
     if separate_th2:
         wrps = rename_th2(wrps)
-    return gen.group(wrps, key_func=lambda w: "/".join(w.in_file_path))
+    return gen.group(wrps, key_func=lambda w: w.in_file_path)
 
 
 def plot_grouper_by_analyzer_name(wrps, separate_th2=True):
@@ -200,16 +199,26 @@ class Plotter(toolinterface.Tool):
 
 
 def _mk_legendnames(filenames):
-    # trims filesnames from front and back
+    # only one file: return directly
     if len(filenames) < 2:
         return filenames[:]
+
+    # try the sframe way:
+    lns = list(n.split('.') for n in filenames)
+    if all(len(l) == 5 for l in lns):
+        return list(l[3] for l in lns)
+
+    # try trim filesnames from front and back
     lns = filenames[:]
-    while all(n[0] == lns[0][0] for n in lns):
-        for i in xrange(len(lns)):
-            lns[i] = lns[i][1:]
-    while all(n[-1] == lns[0][-1] for n in lns):
-        for i in xrange(len(lns)):
-            lns[i] = lns[i][:-1]
+    try:
+        while all(n[0] == lns[0][0] for n in lns):
+            for i in xrange(len(lns)):
+                lns[i] = lns[i][1:]
+        while all(n[-1] == lns[0][-1] for n in lns):
+            for i in xrange(len(lns)):
+                lns[i] = lns[i][:-1]
+    except IndexError:
+        return filenames[:]
     return lns
 
 
@@ -227,7 +236,12 @@ class RootFilePlotter(toolinterface.ToolChain):
     :param name:                str, tool name
     """
 
-    def __init__(self, rootfile, plotter_factory=None, flat=False, name=None):
+    def __init__(self,
+                 rootfile,
+                 plotter_factory=None,
+                 flat=False,
+                 name=None,
+                 filter_keyfunc=None):
         super(RootFilePlotter, self).__init__(name)
 
         self.private_plotter = None
@@ -246,20 +260,23 @@ class RootFilePlotter(toolinterface.ToolChain):
             plotter_factory = Plotter
         aliases = diskio.generate_aliases(self.rootfile)
         aliases = itertools.ifilter(
-            lambda a: type(a.type) == str and a.type.startswith('TH'),
+            lambda a: type(a.type) == str and (
+                a.type.startswith('TH') or a.type == 'TProfile'
+            ),
             aliases
         )
+        aliases = itertools.ifilter(filter_keyfunc, aliases)
         aliases = sorted(
             aliases,
-            key=lambda a: '/'.join(a.in_file_path)
+            key=lambda a: a.in_file_path
         )
         self.aliases = aliases
 
         legendnames = _mk_legendnames(rootfiles)
         legendnames = dict(itertools.izip(rootfiles, legendnames))
         self.message(
-            'INFO Here are the rootfiles and legend names that I will use: %s'
-            % str(legendnames)
+            'INFO Here are the rootfiles and legend names that I will use:\n'
+            + '\n'.join('%22s: %s' % (v,k) for k,v in legendnames.iteritems())
         )
         colors = settings.default_colors[:len(rootfiles)]
         def colorizer(wrps):
@@ -273,13 +290,13 @@ class RootFilePlotter(toolinterface.ToolChain):
         # either print all in one dir...
         if flat:
             self.private_plotter = plotter_factory(
-                filter_keyfunc='Dummy',
+                filter_keyfunc=lambda _: True,
                 load_func=lambda _: colorizer(gen.load(gen.fs_content())),
                 plot_grouper=plot_grouper_by_in_file_path,
                 plot_setup=lambda ws: gen.mc_stack_n_data_sum(
                     ws, lambda w: '', True),
-                save_name_func=lambda w: '_'.join(
-                    w._renderers[0].in_file_path),
+                save_name_func=lambda w:
+                    w._renderers[0].in_file_path.replace('/', '_'),
                 canvas_decorators=[rendering.Legend],
             )
 
@@ -287,6 +304,7 @@ class RootFilePlotter(toolinterface.ToolChain):
         else:
             for path in (a.in_file_path for a in self.aliases):
                 rfp = self
+                path = path.split('/')
 
                 # make dirs if not in basedir
                 if len(path) > 1:
@@ -303,7 +321,7 @@ class RootFilePlotter(toolinterface.ToolChain):
                         def loader(filter_keyfunc):
                             wrps = analysis.fs_aliases
                             wrps = itertools.ifilter(
-                                lambda w: w.in_file_path[:-1] == p
+                                lambda w: w.in_file_path.split('/')[:-1] == p
                                           and filter_keyfunc(w),
                                 wrps
                             )
