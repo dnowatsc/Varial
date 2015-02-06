@@ -226,7 +226,7 @@ class GitTagger(Tool):
                 os.system('git commit -a --amend -m "{0}"'.format(previous_commit_msg))
 
             elif commit_msg.startswith('-a'):
-                os.system('git commit -a --amend -m "{0}"'.format(commit_msg[3:]))
+                os.system('git commit -a --amend -m "From plot.py: {0}"'.format(commit_msg[3:]))
                 with open(self.logfilename) as readf:
                     lines = readf.readlines()
                     latest_tag = lines[-1].split()[0]
@@ -253,7 +253,7 @@ class GitTagger(Tool):
                     except ValueError:
                         raise NameError('Invalid version tag in {0}!'.format(logfilename))
                     settings.git_tag = new_tag
-                    os.system('git commit -am "%s"' %commit_msg)
+                    os.system('git commit -am "From plot.py: {0}"'.format(commit_msg))
                     os.system('git tag -af "plot_v{0}" -m "Automatically created tag version {0}"'.format(new_tag))
                     logf.write(time.strftime(new_tag + " %Y%m%dT%H%M%S ",time.localtime()) + commit_msg + '\n')
 
