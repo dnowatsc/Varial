@@ -213,6 +213,13 @@ class GitTagger(Tool):
                 previous_commit_msg = subprocess.check_output('git log -1 --pretty=%B', shell=True)
                 previous_commit_msg = previous_commit_msg.replace('\n', '')
                 os.system('git commit -a --amend -m "{0}"'.format(previous_commit_msg))
+                with open(self.logfilename) as readf:
+                    lines = readf.readlines()
+                    latest_tag = lines[-1].split()[0]
+                with open(self.logfilename, "w") as writef:
+                    writef.writelines([item for item in lines[:-1]])
+                    writef.write(time.strftime(latest_tag + " %Y%m%dT%H%M%S ",time.localtime()) + previous_commit_msg + '\n')
+                os.system('git tag -af "plot_v{0}" -m "Automatically created tag version {0}"'.format(latest_tag))
 
             elif commit_msg.startswith('-a'):
                 os.system('git commit -a --amend -m "From plot.py: {0}"'.format(commit_msg[3:]))
