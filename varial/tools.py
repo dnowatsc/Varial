@@ -21,9 +21,9 @@ import time
 import subprocess
 
 import analysis
-import dbio
 import diskio
 import generators as gen
+import pklio
 import settings
 import wrappers
 
@@ -56,7 +56,7 @@ class HistoLoader(Tool):
                  pattern=None,
                  filter_keyfunc=None,
                  hook_loaded_histos=None,
-                 io=dbio,
+                 io=pklio,
                  name=None):
         super(HistoLoader, self).__init__(name)
         self.pattern = pattern
@@ -95,8 +95,8 @@ class CopyTool(Tool):
                  wipe_dest_dir=True,
                  name=None):
         super(CopyTool, self).__init__(name)
-        self.dest = dest
-        self.src = src
+        self.dest = dest.replace('~', os.getenv('HOME'))
+        self.src = src.replace('~', os.getenv('HOME'))
         self.ignore = ignore
         self.wipe_dest_dir = wipe_dest_dir
 
