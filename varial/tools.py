@@ -219,8 +219,8 @@ class GitTagger(Tool):
     def run(self):
         if os.system('git diff --quiet') or os.system('git diff --cached --quiet'):
             os.system('git status')
-            commit_msg = raw_input('Please give commit message (empty := amend commit, -no := no commit): ')
-            if commit_msg == "":
+            commit_msg = raw_input('Please give commit message (empty := amend commit, -a <Msg>:= amend commit with new message <Msg>, -no := no commit): ')
+            if commit_msg == '':
                 previous_commit_msg = subprocess.check_output('git log -1 --pretty=%B', shell=True)
                 previous_commit_msg = previous_commit_msg.replace('\n', '')
                 os.system('git commit -a --amend -m "{0}"'.format(previous_commit_msg))
