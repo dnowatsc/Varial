@@ -215,6 +215,11 @@ def _mk_legendnames(filenames):
         return filenames[:]
     return lns
 
+def _skim_to_basename(filenames):
+    for f in filenames:
+        skim_f = os.path.basename(f)
+        yield skim_f
+
 
 class RootFilePlotter(toolinterface.ToolChain):
     """
@@ -267,7 +272,7 @@ class RootFilePlotter(toolinterface.ToolChain):
         self.aliases = aliases
 
         legendnames = _mk_legendnames(rootfiles)
-        legendnames = dict(itertools.izip(rootfiles, legendnames))
+        legendnames = dict(itertools.izip(_skim_to_basename(rootfiles), legendnames))
         self.message(
             'INFO Here are the rootfiles and legend names that I will use:\n'
             + '\n'.join('%22s: %s' % (v,k) for k,v in legendnames.iteritems())

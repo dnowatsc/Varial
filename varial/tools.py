@@ -212,23 +212,35 @@ class GitTagger(Tool):
             if commit_msg == '':
                 previous_commit_msg = subprocess.check_output('git log -1 --pretty=%B', shell=True)
                 previous_commit_msg = previous_commit_msg.replace('\n', '')
-                os.system('git commit -a --amend -m "{0}"'.format(previous_commit_msg))
                 with open(self.logfilename) as readf:
                     lines = readf.readlines()
                     latest_tag = lines[-1].split()[0]
                 with open(self.logfilename, "w") as writef:
                     writef.writelines([item for item in lines[:-1]])
                     writef.write(time.strftime(latest_tag + " %Y%m%dT%H%M%S ",time.localtime()) + previous_commit_msg + '\n')
+                os.system('git commit -a --amend -m "{0}"'.format(previous_commit_msg))
                 os.system('git tag -af "plot_v{0}" -m "Automatically created tag version {0}"'.format(latest_tag))
 
+            elif commit_msg.startswith('new_tag '):
+                with open(self.logfilename, 'a+') as logf:
+                    new_tag = commit_msg.split()[1]
+                    if len(new_tag.split('.')) != 2 or not new_tag.split('.')[0].isdigit() or not new_tag.split('.')[1].isdigit():
+                        raise NameError('ERROR: invalid tag')
+                        return
+                    commit_msg = ' '.join(commit_msg.split()[2:])
+                    settings.git_tag = new_tag
+                    logf.write(time.strftime(new_tag + " %Y%m%dT%H%M%S ",time.localtime()) + commit_msg + '\n')
+                    os.system('git commit -am "From plot.py: {0}"'.format(commit_msg))
+                    os.system('git tag -af "plot_v{0}" -m "Automatically created tag version {0}"'.format(new_tag))
+
             elif commit_msg.startswith('-a'):
-                os.system('git commit -a --amend -m "From plot.py: {0}"'.format(commit_msg[3:]))
                 with open(self.logfilename) as readf:
                     lines = readf.readlines()
                     latest_tag = lines[-1].split()[0]
                 with open(self.logfilename, "w") as writef:
                     writef.writelines([item for item in lines[:-1]])
                     writef.write(time.strftime(latest_tag + " %Y%m%dT%H%M%S ",time.localtime()) + commit_msg[3:] + '\n')
+                os.system('git commit -a --amend -m "From plot.py: {0}"'.format(commit_msg[3:]))
 
             elif commit_msg == "-no":
                 pass
@@ -241,17 +253,19 @@ class GitTagger(Tool):
                         version_split = latest_tag.split('.')
                         if len(version_split) != 2:
                             raise NameError('Invalid tag in {0}!'.format(logfilename))
+                            return
                         new_subtag = int(version_split[-1])+1
                         new_tag = version_split[0]+'.'+str(new_subtag)
                     except IndexError:
-                        print '!!Index Error!!'
+                        print 'Index Error! Set tag to 1.0'
                         new_tag = '1.0'
                     except ValueError:
                         raise NameError('Invalid version tag in {0}!'.format(logfilename))
+                        return
                     settings.git_tag = new_tag
+                    logf.write(time.strftime(new_tag + " %Y%m%dT%H%M%S ",time.localtime()) + commit_msg + '\n')
                     os.system('git commit -am "From plot.py: {0}"'.format(commit_msg))
                     os.system('git tag -af "plot_v{0}" -m "Automatically created tag version {0}"'.format(new_tag))
-                    logf.write(time.strftime(new_tag + " %Y%m%dT%H%M%S ",time.localtime()) + commit_msg + '\n')
 
     # def check_version(self, filename, index=-1):
     #     filename.seek(0,0)
