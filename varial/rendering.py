@@ -146,7 +146,8 @@ class GraphRenderer(Renderer, wrappers.GraphWrapper):
         return self.val_x_max or self.graph.GetXaxis().GetXmax()
 
     def y_min(self):
-        return self.val_y_min or self.graph.GetYaxis().GetXmin() + 1e-23  # > 0 cuts away half numbers
+        # > 0 cuts away half numbers
+        return self.val_y_min or self.graph.GetYaxis().GetXmin() + 1e-23
 
     def y_max(self):
         return self.val_y_max or self.graph.GetYaxis().GetXmax()
@@ -397,13 +398,11 @@ class TextBox(util.Decorator):
     """Draw Textboxes individually by renderer name"""
     def __init__(self, inner, dd=True, **kws):
         super(TextBox, self).__init__(inner, dd, **kws)
-        self.dec_par.update(kws)
-        assert('textbox_dict' in self.dec_par)
+        assert('textbox' in self.dec_par)
 
     def do_final_cosmetics(self):
         self.decoratee.do_final_cosmetics()
-        textbox = self.dec_par['textbox_dict'][self.renderers[0].name]
-        textbox.Draw()
+        self.dec_par['textbox'].Draw()
 
 
 class Legend(util.Decorator):
@@ -447,9 +446,12 @@ class Legend(util.Decorator):
         y_pos   = par['y_pos']
         width   = par['label_width']
         height  = par['label_height'] * n_entries
-        x_pos *= (1. - width)  # adjust for space left
-        y_pos *= (1. - height) # adjust for space left
-        return x_pos, y_pos, x_pos + width, y_pos + height
+        if y_pos + height/2. > 1.:
+             y_pos = 1 - height/2. # do not go outside canvas
+        return x_pos - width/2., \
+               y_pos - height/2., \
+               x_pos + width/2., \
+               y_pos + height/2.
 
     def do_final_cosmetics(self):
         """
@@ -461,12 +463,14 @@ class Legend(util.Decorator):
         if self.legend:
             return
 
-        tmp_leg = self.main_pad.BuildLegend(0.1, 0.6, 0.5, 0.8) # get legend entry objects
+        # get legend entry objects
+        tmp_leg = self.main_pad.BuildLegend(0.1, 0.6, 0.5, 0.8)
         entries = self.make_entry_tupels(tmp_leg)
         tmp_leg.Clear()
         self.main_pad.GetListOfPrimitives().Remove(tmp_leg)
         tmp_leg.Delete()
 
+        # create a new legend
         bounds = self._calc_bounds(len(entries))
         legend = TLegend(*bounds)
         legend.SetBorderSize(0)

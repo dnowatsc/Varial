@@ -17,8 +17,9 @@ import collections
 import itertools
 
 import analysis
-import operator
 import diskio
+import wrappers
+import operator
 
 
 def _iterableize(obj_or_iterable):
@@ -33,7 +34,7 @@ def _iterableize(obj_or_iterable):
 
 def debug_printer(iterable, print_obj=True):
     """
-    Print objects and their type on flying by. Object printing can be turned off.
+    Print objects and their type on flying by. Object printing can be disabled.
 
     :param iterable:    An iterable with objects
     :yields:            same as input
@@ -153,7 +154,7 @@ def group(wrps, key_func=None):
     :param wrps:        Wrapper iterable
     :param key_func:    callable to group the wrappers. If ``None``, then
                         ``lambda w: w.in_file_path`` is used.
-    :yields:            Wrapper
+    :yields:            WrapperWrapper
 
     **Example:** This is neccessary before stacking, in order to have only
     same-observable-histograms stacked together::
@@ -165,7 +166,7 @@ def group(wrps, key_func=None):
     if not key_func:
         key_func = lambda w: w.in_file_path
     for k, g in itertools.groupby(wrps, key_func):
-        yield g
+        yield wrappers.WrapperWrapper(list(g), name=k)
 
 
 def interleave(*grouped_wrps):
@@ -295,7 +296,12 @@ def gen_norm_to_data_lumi(wrps):
     )
 
 
-def gen_make_eff_graphs(wrps, postfix_sub='_sub', postfix_tot='_tot'):
+def gen_make_eff_graphs(wrps,
+                        postfix_sub='_sub',
+                        postfix_tot='_tot',
+                        new_postfix='_eff',
+                        pair_func=lambda w, l: w.in_file_path[:-l],
+                        yield_everything=False):
     """
     Makes efficiency graphs and interleaves them into a sorted stream.
 
@@ -311,23 +317,34 @@ def gen_make_eff_graphs(wrps, postfix_sub='_sub', postfix_tot='_tot'):
                         default: ``_tot``
     :yields:            Wrapper (simply forwarding), GraphWrapper
     """
-    token = lambda w: w.legend + ':' + w.in_file_path[:-4]
+
+    len_postfix_sub = len(postfix_sub)
+    len_postfix_tot = len(postfix_tot)
+
+    def rename(w):
+        w.in_file_path = w.in_file_path[:-len_postfix_sub] + new_postfix
+        w.name = w.in_file_path.split('/')[-1]
+        return w
+
     subs, tots = {}, {}
     res = []
     for wrp in wrps:
-        yield wrp
+        if yield_everything:
+            yield wrp
         if wrp.name.endswith(postfix_sub):
-            t = token(wrp)
+            t = pair_func(wrp, len_postfix_sub)
             if t in tots:
-                res.append(op.eff((wrp, tots.pop(t))))
+                res.append(rename(op.eff((wrp, tots.pop(t)))))
             else:
                 subs[t] = wrp
         elif wrp.name.endswith(postfix_tot):
-            t = token(wrp)
+            t = pair_func(wrp, len_postfix_tot)
             if t in subs:
-                res.append(op.eff((subs.pop(t), wrp)))
+                res.append(rename(op.eff((subs.pop(t), wrp))))
             else:
                 tots[t] = wrp
+        elif not yield_everything:  # do not yield everything twice
+            yield wrp
         if res and not (subs or tots):
             for _ in xrange(len(res)):
                 yield res.pop(0)
@@ -382,7 +399,7 @@ def fs_content():
         yield alias
 
 
-def dir_content(dir_path='./'):
+def dir_content(dir_path='./*.root'):
     """
     Proxy of diskio.generate_aliases(directory)
 
@@ -431,8 +448,6 @@ def save(wrps, filename_func, suffices=None):
 import rendering as rnd
 
 
-# TODO all color generators should use (wrp.legend or wpr.sample) and 
-# analysis.get_color
 def apply_fillcolor(wrps, colors=None):
     """
     Uses ``histo.SetFillColor``. Colors from analysis module, if not given.
@@ -444,10 +459,10 @@ def apply_fillcolor(wrps, colors=None):
     n = 0
     for wrp in wrps:
         if colors:
-            color = colors[n%len(colors)]
+            color = colors[n % len(colors)]
             n += 1
         else:
-            color = analysis.get_color(wrp.sample)
+            color = analysis.get_color(wrp.legend or wrp.sample)
         if color:
             wrp.primary_object().SetFillColor(color)
         yield wrp
@@ -464,10 +479,10 @@ def apply_linecolor(wrps, colors=None):
     n = 0
     for wrp in wrps:
         if colors:
-            color = colors[n%len(colors)]
+            color = colors[n % len(colors)]
             n += 1
         else:
-            color = analysis.get_color(wrp.sample)
+            color = analysis.get_color(wrp.legend or wrp.sample)
         if color:
             wrp.primary_object().SetLineColor(color)
         yield wrp
@@ -478,11 +493,24 @@ def apply_linewidth(wrps, linewidth=2):
     Uses ``histo.SetLineWidth``. Default is 2.
 
     :param wrps:        HistoWrapper iterable
-    :param line_width:  argument for SetLineWidth
+    :param linewidth:  argument for SetLineWidth
     :yields:            HistoWrapper
     """
     for wrp in wrps:
         wrp.primary_object().SetLineWidth(linewidth)
+        yield wrp
+
+
+def apply_fillstyle(wrps, fillstyle=3444):
+    """
+    Uses ``histo.SetLineWidth``. Default is 2.
+
+    :param wrps:        HistoWrapper iterable
+    :param fillstyle:   integer argument for SetFillStyle
+    :yields:            HistoWrapper
+    """
+    for wrp in wrps:
+        wrp.primary_object().SetFillStyle(fillstyle)
         yield wrp
 
 
@@ -497,10 +525,10 @@ def apply_markercolor(wrps, colors=None):
     n = 0
     for wrp in wrps:
         if colors:
-            color = colors[n%len(colors)]
+            color = colors[n % len(colors)]
             n += 1
         else:
-            color = analysis.get_color(wrp.sample)
+            color = analysis.get_color(wrp.legend or wrp.sample)
         if color:
             wrp.primary_object().SetMarkerColor(color)
         yield wrp
@@ -657,7 +685,7 @@ def mc_stack_n_data_sum(wrps, merge_mc_key_func=None, use_all_data_lumi=False):
     :param wrps:                Iterables of HistoWrapper (grouped)
     :param merge_mc_key_func:   key function for python sorted(...), default
                                 tries to sort after stack position
-    :yields:                    tuples of wrappers for plotting
+    :yields:                    WrapperWrapper of wrappers for plotting
     """
     if not merge_mc_key_func:
         merge_mc_key_func = lambda w: analysis.get_stack_position(w.sample)
@@ -708,9 +736,9 @@ def mc_stack_n_data_sum(wrps, merge_mc_key_func=None, use_all_data_lumi=False):
 
         # return in order for plotting: bkg, signals, data
         res = [bkg_stk] + sig_lst + [dat_sum]
-        res = tuple(w for w in res if w)
+        res = filter(None, res)
         if res:
-            yield tuple(res)
+            yield wrappers.WrapperWrapper(res, name=grp.name)
         else:
             raise op.TooFewWrpsError('No histograms present!')
 
@@ -745,7 +773,7 @@ def canvas(grps, decorators=()):
     return build_canvas(grps)                   # and do the job
 
 
-def save_canvas_lin_log(cnvs, filename_func):
+def save_canvas_lin_log(cnvs, filename_func, log_only_1d_hists=True):
     """
     Saves canvasses, switches to logscale, saves again.
 
@@ -757,6 +785,12 @@ def save_canvas_lin_log(cnvs, filename_func):
         cnvs,
         lambda c: filename_func(c) + '_lin'
     )
+    if log_only_1d_hists:
+        cnvs = itertools.ifilter(
+            lambda c: not any(
+                'H2' in r.type or 'H3' in r.type for r in c._renderers),
+            cnvs
+        )
     cnvs = switch_log_scale(cnvs)
     cnvs = save(
         cnvs,
