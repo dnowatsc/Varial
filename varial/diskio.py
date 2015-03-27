@@ -93,17 +93,21 @@ def close_root_file(filename):
 use_analysis_cwd = True
 _save_log = {}
 
-
-def write(wrp, filename=None, suffices=(), mode='RECREATE'):
-    """Writes wrapper to disk, including root objects."""
-    if settings.git_tag: 
-        wrp.git_tag = settings.git_tag
+def prepare_filename(wrp, filename):
     if not filename:
         filename = wrp.name
     if use_analysis_cwd:
         filename = join(analysis.cwd, filename)
     if filename[-5:] == '.info':
         filename = filename[:-5]
+    return filename
+
+
+def write(wrp, filename=None, suffices=(), mode='RECREATE'):
+    """Writes wrapper to disk, including root objects."""
+    if settings.git_tag: 
+        wrp.git_tag = settings.git_tag
+    filename = prepare_filename(wrp, filename)
     # check for overwriting something
     if filename in _save_log:
         monitor.message(
