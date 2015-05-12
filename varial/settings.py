@@ -32,6 +32,17 @@ def readgittag(logfile = 'GITTAGGER_LOG.txt'):
 
 git_tag = readgittag()
 
+def readgittag(logfile = 'GITTAGGER_LOG.txt'):
+    try:
+        with open(logfile) as f:
+            lastline = f.readlines()[-1]
+            latestversion = lastline.split()[0]
+    except (IndexError, IOError):
+        latestversion = 'No_tag'
+    return latestversion
+
+git_tag = readgittag()
+
 
 def logfilename():
     """Generate a logfile name with timestamp."""
