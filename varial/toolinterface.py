@@ -44,6 +44,9 @@ class _ToolBase(object):
     def reset(self):
         pass
 
+    def update(self):
+        pass
+
     def wanna_reuse(self, all_reused_before_me):
         """If True is returned, run is not called."""
         return self.can_reuse and all_reused_before_me
@@ -76,7 +79,10 @@ class Tool(_ToolBase):
         self.time_fin = None
 
     def __enter__(self):
-        self.reset()
+        if not self.time_fin:
+            self.update()  # see metaclass
+        else:
+            self.reset()  # see metaclass
         res = super(Tool, self).__enter__()
         self.cwd = analysis.cwd
         self.logfile = os.path.join(self.cwd, '%s.log' % self.name)
@@ -88,10 +94,16 @@ class Tool(_ToolBase):
         super(Tool, self).__exit__(exc_type, exc_val, exc_tb)
 
     def wanna_reuse(self, all_reused_before_me):
-        return (
-            super(Tool, self).wanna_reuse(all_reused_before_me)
+        if (super(Tool, self).wanna_reuse(all_reused_before_me)
             and os.path.exists(self.logfile)
-        )  # TODO make check with hash over result, stored in self.logfile
+        ):
+            with open(self.logfile) as f:
+                if f.readline() == 'result available\n':
+                    if os.path.exists(os.path.join(self.cwd, 'result.info')):
+                        return True
+                else:
+                    return True
+        return False
 
     def reuse(self):
         self.message('INFO reusing...')
@@ -120,6 +132,7 @@ class Tool(_ToolBase):
                     filenames.append('result' + num_str)
                     self.io.write(wrp, 'result' + num_str)
                 self.io.write(
+                    # TODO use wrpwrp here
                     wrappers.Wrapper(
                         name=self.name,
                         RESULT_WRAPPERS=filenames
@@ -127,7 +140,9 @@ class Tool(_ToolBase):
                     'result'
                 )
         self.time_fin = time.ctime() + '\n'
-        with open(self.logfile, 'w') as f:    # TODO: mv log into result.info
+        with open(self.logfile, 'w') as f:
+            if self.result:
+                f.write('result available\n')
             f.write(self.time_start)
             f.write(self.time_fin)
         super(Tool, self).finished()
@@ -249,6 +264,9 @@ _n_parallel_workers_lock = None
 
 
 def parallel_worker_start():
+    if not _n_parallel_workers:
+        return
+
     while _n_parallel_workers.value >= settings.max_num_processes:
         time.sleep(0.5)
     _n_parallel_workers_lock.acquire()
@@ -257,6 +275,9 @@ def parallel_worker_start():
 
 
 def parallel_worker_done():
+    if not _n_parallel_workers:
+        return
+
     diskio.close_open_root_files()
     _n_parallel_workers_lock.acquire()
     _n_parallel_workers.value -= 1
@@ -302,7 +323,7 @@ class ToolChainParallel(ToolChain):
     def run(self):
         global _n_parallel_workers, _n_parallel_workers_lock
 
-        if not settings.use_parallel_chains:
+        if not settings.use_parallel_chains or settings.max_num_processes == 1:
             return super(ToolChainParallel, self).run()
 
         if not self.tool_chain:
@@ -327,6 +348,8 @@ class ToolChainParallel(ToolChain):
             if not reused:
                 self._reuse = False
             self._recursive_push_result(self.tool_names[name])
+
+        # TODO: return results for ParallelToolChains in ParallelToolChains
 
         #cleanup
         pool.close()

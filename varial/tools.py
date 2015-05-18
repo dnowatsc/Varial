@@ -68,15 +68,25 @@ class HistoLoader(Tool):
 
     def run(self):
         if self.pattern:
-            wrps = gen.dir_content(self.pattern)
-            wrps = itertools.ifilter(self.filter_keyfunc, wrps)
-            wrps = gen.sort(wrps)
-            wrps = gen.load(wrps)
+            if not glob.glob(self.pattern):
+                self.message('WARNING No input file found for pattern "%s"'
+                             % self.pattern)
+                wrps = []
+            else:
+                wrps = gen.dir_content(self.pattern)
+                wrps = itertools.ifilter(self.filter_keyfunc, wrps)
+                wrps = gen.load(wrps)
+                if self.hook_loaded_histos:
+                    wrps = self.hook_loaded_histos(wrps)
+                wrps = gen.sort(wrps)
         else:
             wrps = gen.fs_filter_active_sort_load(self.filter_keyfunc)
-        if self.hook_loaded_histos:
-            wrps = self.hook_loaded_histos(wrps)
+            if self.hook_loaded_histos:
+                wrps = self.hook_loaded_histos(wrps)
         self.result = list(wrps)
+
+        if not self.result:
+            self.message('WARNING No histograms found.')
 
 
 class CopyTool(Tool):
@@ -105,37 +115,43 @@ class CopyTool(Tool):
     def run(self):
         if self.src:
             src = os.path.abspath(self.src)
+            src_objs = glob.glob(src)
         elif self.cwd:
             src = os.path.abspath(os.path.join(self.cwd, '..'))
+            src_objs = glob.glob(src + '/*')
         else:
             src = os.getcwd()
-        src_objs = glob.glob(src + '/*')
+            src_objs = glob.glob(src + '/*')
         dest = os.path.abspath(self.dest)
 
         # check for htaccess and copy it to src dirs
         htaccess = os.path.join(dest, '.htaccess')
         if os.path.exists(htaccess):
-            for path, _, _ in os.walk(src):
-                shutil.copy2(htaccess, path)
+            for src in src_objs:
+                for path, _, _ in os.walk(src):
+                    shutil.copy2(htaccess, path)
 
-        # clean dest dir and copy
+        # clean dest dir
         if self.wipe_dest_dir:
             src_basenames = list(os.path.basename(p) for p in src_objs)
             for f in glob.glob(dest + '/*'):
                 if os.path.isdir(f) and os.path.basename(f) in src_basenames:
                     self.message('INFO Deleting: ' + f)
                     shutil.rmtree(f, True)
+
+        # copy
         ign_pat = shutil.ignore_patterns(*self.ignore)
-        for f in src_objs:
-            if os.path.isdir(f):
-                f = os.path.basename(f)
+        for src in src_objs:
+            self.message('INFO Copying: ' + src)
+            if os.path.isdir(src):
+                f = os.path.basename(src)
                 shutil.copytree(
-                    os.path.join(src, f),
+                    src,
                     os.path.join(dest, f),
                     ignore=ign_pat,
                 )
             else:
-                shutil.copy2(f, dest)
+                shutil.copy2(src, dest)
 
 
 class ZipTool(Tool):
@@ -292,6 +308,7 @@ def mk_rootfile_plotter(name="RootFilePlots",
                         plotter_factory=None,
                         combine_files=False,
                         filter_keyfunc=None,
+                        legendnames=None,
                         **kws):
     """
     Make a plotter chain that plots all content of all rootfiles in cwd.
@@ -325,7 +342,13 @@ def mk_rootfile_plotter(name="RootFilePlots",
 
     if combine_files:
         plotters = [RootFilePlotter(
-            pattern, new_plotter_factory, flat, name, filter_keyfunc)]
+            pattern,
+            new_plotter_factory,
+            flat,
+            name,
+            filter_keyfunc,
+            legendnames
+        )]
         tc = ToolChain(name, plotters)
     else:
         plotters = list(
@@ -335,6 +358,7 @@ def mk_rootfile_plotter(name="RootFilePlots",
                 flat,
                 f[:-5].split('/')[-1],
                 filter_keyfunc,
+                legendnames
             )
             for f in glob.iglob(pattern)
         )
