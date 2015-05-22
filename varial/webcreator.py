@@ -275,7 +275,7 @@ class WebCreator(toolinterface.Tool):
             self.make_headline()
             self.make_subfolder_links()
             self.make_html_file_links()
-            self.make_info_file_divs()
+            # self.make_info_file_divs()
             self.make_tex_file_divs()
             self.make_image_divs()
             self.finalize_page()
