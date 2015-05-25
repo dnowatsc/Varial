@@ -38,6 +38,17 @@ def plot_grouper_by_in_file_path(wrps, separate_th2=True):
     return gen.group(wrps, key_func=lambda w: w.in_file_path)
 
 
+def plot_grouper_by_number_of_plots(wrps, n_per_group):
+    class GroupKey(object):
+        def __init__(self, n_per_group):
+            self.n_th_obj = -1
+            self.n_per_group = n_per_group
+        def __call__(self, _):
+            self.n_th_obj += 1
+            return self.n_th_obj / self.n_per_group
+    return gen.group(wrps, GroupKey(n_per_group))
+
+
 def overlay_colorizer(wrps, colors=None):
     wrps = gen.apply_linecolor(wrps, colors)
     for w in wrps:
@@ -216,7 +227,7 @@ def _mk_legendnames(filenames):
         return {filenames[0]: filenames[0]}
 
     # try the sframe way:
-    lns = list(n.split('.') for n in filenames)
+    lns = list(n.split('.') for n in filenames if type(n) is str)
     if all(len(l) == 5 for l in lns):
         return dict((f, l[3]) for f, l in itertools.izip(filenames, lns))
 
@@ -266,7 +277,10 @@ class RootFilePlotter(toolinterface.ToolChainParallel):
         self.rootfile = rootfile  # only the base instance has this
         if not rootfile:
             return
-        rootfiles = glob.glob(rootfile)
+        if type(rootfile) is str:
+            rootfiles = glob.glob(rootfile)
+        elif type(rootfile) is list:
+            rootfiles = rootfile
         if not rootfiles:
             return
 
@@ -277,7 +291,10 @@ class RootFilePlotter(toolinterface.ToolChainParallel):
         ROOT.gROOT.SetBatch()
         if not plotter_factory:
             plotter_factory = Plotter
-        aliases = diskio.generate_aliases(self.rootfile)
+        if type(self.rootfile) is str:
+            aliases = diskio.generate_aliases(self.rootfile)
+        elif type(self.rootfile) is list:
+            aliases = diskio.generate_aliases_list(self.rootfile)
         aliases = itertools.ifilter(
             lambda a: type(a.type) == str and (
                 a.type.startswith('TH') or a.type == 'TProfile'
