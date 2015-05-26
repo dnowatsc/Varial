@@ -228,9 +228,28 @@ class SampleNormalizer(Tool):
 class GitTagger(Tool):
     can_reuse = False
 
+
+    def open_file(self, filename):
+        try:
+            with open(filename) as readf:
+                lines = readf.readlines()
+                latest_tag = lines[-1].split()[0]
+                print latest_tag
+                return True
+        except IOError:
+            return False
+
+
+    def find_log(self, filename):
+        
+
+
     def __init__(self, logfilename='GITTAGGER_LOG.txt'):
         super(GitTagger, self).__init__()
         self.logfilename = logfilename
+        self.counter = 4
+        self.logfound = False
+
 
     def run(self):
         if os.system('git diff --quiet') or os.system('git diff --cached --quiet'):
@@ -257,7 +276,7 @@ class GitTagger(Tool):
                     commit_msg = ' '.join(commit_msg.split()[2:])
                     settings.git_tag = new_tag
                     logf.write(time.strftime(new_tag + " %Y%m%dT%H%M%S ",time.localtime()) + commit_msg + '\n')
-                    os.system('git commit -am "From plot.py: {0}"'.format(commit_msg))
+                    os.system('git commit -am "From GitTagger: {0}"'.format(commit_msg))
                     os.system('git tag -af "plot_v{0}" -m "Automatically created tag version {0}"'.format(new_tag))
 
             elif commit_msg.startswith('-a'):
@@ -267,7 +286,7 @@ class GitTagger(Tool):
                 with open(self.logfilename, "w") as writef:
                     writef.writelines([item for item in lines[:-1]])
                     writef.write(time.strftime(latest_tag + " %Y%m%dT%H%M%S ",time.localtime()) + commit_msg[3:] + '\n')
-                os.system('git commit -a --amend -m "From plot.py: {0}"'.format(commit_msg[3:]))
+                os.system('git commit -a --amend -m "From GitTagger: {0}"'.format(commit_msg[3:]))
 
             elif commit_msg == "-no":
                 pass
@@ -291,7 +310,7 @@ class GitTagger(Tool):
                         return
                     settings.git_tag = new_tag
                     logf.write(time.strftime(new_tag + " %Y%m%dT%H%M%S ",time.localtime()) + commit_msg + '\n')
-                    os.system('git commit -am "From plot.py: {0}"'.format(commit_msg))
+                    os.system('git commit -am "From GitTagger: {0}"'.format(commit_msg))
                     os.system('git tag -af "plot_v{0}" -m "Automatically created tag version {0}"'.format(new_tag))
 
     # def check_version(self, filename, index=-1):
