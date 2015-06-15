@@ -42,7 +42,6 @@ class ThetaLimits(varial.tools.Tool):
             setattr(wrp, cat_name + '__' + bkg.sample, bkg.histo)
         for sig in sigs:
             cat_name = sig.in_file_path.split('/')[-2]
-            # sig_name = string.replace(sig.sample, '_', '')
             setattr(wrp, cat_name + '__' + sig.sample, sig.histo)
 
         # write manually
@@ -85,21 +84,6 @@ class ThetaLimits(varial.tools.Tool):
         if not os.path.exists(plt_dir):
             os.mkdir(plt_dir)
         self.model = self.model_func(self.cwd)
-        # self.model = theta_auto.build_model_from_rootfile(
-        #     os.path.join(self.cwd, 'ThetaHistos.root'),
-        #     include_mc_uncertainties=True
-        # )
-        # self.model.fill_histogram_zerobins()
-        # self.model.set_signal_processes(list(
-        #     k.split('__')[-1]
-        #     for k in theta_wrp.__dict__
-        #     if 'TpTp' in k
-        # ))
-        # # self.model.add_lognormal_uncertainty('ttbar_rate', math.log(1.15), 'TTJets')
-        # # self.model.add_lognormal_uncertainty('qcd_rate', math.log(1.30), 'QCD')
-        # # self.model.add_lognormal_uncertainty('wjets_rate', math.log(1.25), 'WJets')
-        # # self.model.add_lognormal_uncertainty('zjets_rate', math.log(1.50), 'ZJets')
-        # # self.model.add_lognormal_uncertainty('signal_rate', math.log(1.15), 'TpTp_M1000')
 
         # let the fit run
         options = theta_auto.Options()
@@ -123,16 +107,16 @@ class ThetaLimits(varial.tools.Tool):
         theta_auto.config.report.write_html(
             os.path.join(self.cwd, 'result'))
 
-class TpTpThetaLimits(ThetaLimits):
+class ThetaLimitsBranchingRatios(ThetaLimits):
     def __init__(self,
         brs = None,
         *args,**kws
     ):
-        super(TpTpThetaLimits, self).__init__(*args, **kws)
+        super(ThetaLimitsBranchingRatios, self).__init__(*args, **kws)
         self.brs = brs
 
     def run(self):
-        super(TpTpThetaLimits, self).run()
+        super(ThetaLimitsBranchingRatios, self).run()
         self.result = varial.wrappers.Wrapper(
             name=self.result.name,
             res_exp=self.result.res_exp,
@@ -151,12 +135,8 @@ class TriangleLimitPlots(varial.tools.Tool):
 
 
     def run(self):
-        # parent = varial.analysis.lookup_tool('../.')
-        # varial.analysis.print_tool_tree()
         parents = os.listdir(self.cwd+'/..')
-        # print parents
         theta_tools = list(k for k in parents if k.startswith("ThetaLimit"))
-        # print theta_tools
         wrps = list(self.lookup_result('../' + k) for k in theta_tools)
         filename = os.path.join(varial.analysis.cwd, self.name + ".root")
         f = ROOT.TFile.Open(filename, "RECREATE")
