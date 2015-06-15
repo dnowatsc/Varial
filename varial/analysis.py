@@ -138,26 +138,26 @@ class ResultProxy(object):
 
 
 def push_tool(tool):
-    _tool_stack.append(tool)
-    _mktooldir()
     global current_result
     global results_base
+    _tool_stack.append(tool)
+    _mktooldir()
     current_result = ResultProxy(tool, current_result, cwd)
     if not results_base:
         results_base = current_result
 
 
 def pop_tool():
+    global current_result
     t = _tool_stack.pop()
     _mktooldir()
-    global current_result
     current_result.result = getattr(t, 'result', 0) or None
     current_result = current_result.parent
 
 
 def _lookup(key):
     keys = key.split('/')
-    if keys[0] == '.':
+    if keys[0] in ('', '.'):
         keys.pop(0)
     if keys[0] == '..':
         return current_result.lookup(keys)
@@ -244,17 +244,19 @@ def lookup_tool(abs_path):
 
 
 def print_tool_tree():
-    """"""
+    """Print all tools the ran or were reused."""
     print '='*80
     print 'Tools available through analysis.lookup:'
-    _print_tool_tree(results_base, 1)
+    print '+', results_base.name
+    for rname in sorted(results_base.children):
+        _print_tool_tree(results_base.children[rname], 0)
     print '='*80
 
 
 def _print_tool_tree(res, indent):
-    print ' '*indent, res.name
-    for r in res.children.itervalues():
-        _print_tool_tree(r, indent + 4)
+    print '    ' + '|   '*indent + '+', res.name
+    for rname in sorted(res.children):
+        _print_tool_tree(res.children[rname], indent + 1)
 
 
 ############################################################### fileservice ###
@@ -289,3 +291,17 @@ def fileservice(section_name, autosave=True):
         return fs_wrappers[section_name]
     else:
         return wrappers.FileServiceWrapper(name=section_name)
+
+
+############################################################### fileservice ###
+def reset():
+    global active_samples, all_samples, cwd, _tool_stack, results_base, \
+        current_result, fs_aliases, fs_wrappers
+    active_samples = []
+    all_samples = {}
+    cwd = settings.varial_working_dir
+    _tool_stack = []
+    results_base = None
+    current_result = None
+    fs_aliases = []
+    fs_wrappers = {}

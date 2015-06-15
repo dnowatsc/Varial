@@ -44,7 +44,16 @@ class Runner(ToolChain):
     """Runs tools upon instanciation (including proper folder creation)."""
     def __init__(self, tool, default_reuse=False):
         super(Runner, self).__init__(None, [tool], default_reuse)
+        analysis.reset()
         self.run()
+
+
+class PrintToolTree(Tool):
+    """Calls analysis.print_tool_tree()"""
+    can_reuse = False
+
+    def run(self):
+        analysis.print_tool_tree()
 
 
 class HistoLoader(Tool):
@@ -65,12 +74,14 @@ class HistoLoader(Tool):
                  pattern=None,
                  filter_keyfunc=None,
                  hook_loaded_histos=None,
+                 raise_on_empty_result=True,
                  io=pklio,
                  name=None):
         super(HistoLoader, self).__init__(name)
         self.pattern = pattern
         self.filter_keyfunc = filter_keyfunc
         self.hook_loaded_histos = hook_loaded_histos
+        self.raise_on_empty_result = raise_on_empty_result
         self.io = io
 
     def run(self):
@@ -88,7 +99,10 @@ class HistoLoader(Tool):
         self.result = list(wrps)
 
         if not self.result:
-            self.message('WARNING No histograms found.')
+            if self.raise_on_empty_result:
+                raise RuntimeError('ERROR No histograms found.')
+            else:
+                self.message('ERROR No histograms found.')
 
 
 class CopyTool(Tool):
@@ -192,13 +206,18 @@ class CompileTool(Tool):
     def wanna_reuse(self, all_reused_before_me):
         nothing_compiled_yet = True
         for path in self.paths:
-            self.message('Compiling in: ' + path)
+            self.message('INFO Compiling in: ' + path)
+            # here comes a workaround: we need to examine the output of make,
+            # but want to stream it directly to the console as well. Hence use
+            # tee and look at the output after make finished.
             tmp_out = '/tmp/varial_compile_%06i' % random.randint(0, 999999)
-            if subprocess.call(
-                ['make -j 9 | tee %s' % tmp_out],
+            res = subprocess.call(
+                # PIPESTATUS is needed to get the returncode from make
+                ['make -j 9 | tee %s; test ${PIPESTATUS[0]} -eq 0' % tmp_out],
                 cwd=path,
                 shell=True,
-            ):
+            )
+            if res:
                 os.remove(tmp_out)
                 raise RuntimeError('Compilation failed in: ' + path)
             if nothing_compiled_yet:

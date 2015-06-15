@@ -53,7 +53,7 @@ class _ToolBase(object):
 
     def tool_paths(self):
         """Return a list of tool paths for all children."""
-        raise RuntimeError('Superclass method should be called.')
+        raise RuntimeError('_ToolBase.tool_paths() should not be called.')
 
     def wanna_reuse(self, all_reused_before_me):
         """If True is returned, run() will not be called."""
@@ -83,6 +83,7 @@ class Tool(_ToolBase):
         self.cwd = None
         self.result = None
         self.logfile = None
+        self.logfile_res = None
         self.time_start = None
         self.time_fin = None
 
@@ -93,12 +94,19 @@ class Tool(_ToolBase):
             self.reset()  # see metaclass
         res = super(Tool, self).__enter__()
         self.cwd = analysis.cwd
-        self.logfile = os.path.join(self.cwd, '%s.log' % self.name)
+        self.logfile = os.path.join(
+            self.cwd, '%s.log' % self.name)
+        if self.can_reuse:
+            self.logfile_res = os.path.join(
+                self.cwd, '%s (result available).log' % self.name)
+        else:
+            self.logfile_res = self.logfile
         return res
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.cwd = None
         self.logfile = None
+        self.logfile_res = None
         super(Tool, self).__exit__(exc_type, exc_val, exc_tb)
 
     def tool_paths(self):
@@ -106,56 +114,40 @@ class Tool(_ToolBase):
         return [self.name]
 
     def wanna_reuse(self, all_reused_before_me):
-        if (super(Tool, self).wanna_reuse(all_reused_before_me)
-            and os.path.exists(self.logfile)
-        ):
-            with open(self.logfile) as f:
-                if f.readline() == 'result available\n':
-                    if self.io.exists('result'):
-                        return True
-                else:
-                    return True
+        if super(Tool, self).wanna_reuse(all_reused_before_me):
+            if os.path.exists(self.logfile):
+                return True
+            if (os.path.exists(self.logfile_res)
+                and self.io.exists('result')):
+                return True
         return False
 
     def reuse(self):
         self.message('INFO reusing...')
-        res = self.io.get('result')
-        if res:
-            # TODO replace with wrpwrp
-            if hasattr(res, 'RESULT_WRAPPERS'):
-                self.result = list(self.io.read(f) for f in res.RESULT_WRAPPERS)
-            else:
-                self.result = res
+        with self.io.block_of_files:
+            self.result = self.io.get('result')
 
     def starting(self):
         super(Tool, self).starting()
         self.time_start = time.ctime() + '\n'
         if os.path.exists(self.logfile):
             os.remove(self.logfile)
+        if os.path.exists(self.logfile_res):
+            os.remove(self.logfile_res)
 
     def finished(self):
-        with diskio.block_of_files:
-            if isinstance(self.result, wrappers.Wrapper):
+        if any(isinstance(self.result, t) for t in (list, tuple)):
+            try:
+                self.result = wrappers.WrapperWrapper(self.result)
+            except TypeError:
+                pass
+        if isinstance(self.result, wrappers.Wrapper):
+            with self.io.block_of_files:
                 self.result.name = self.name
                 self.io.write(self.result, 'result')
-            elif any(isinstance(self.result, t) for t in (list, tuple)):
-                filenames = []
-                for i, wrp in enumerate(self.result):
-                    num_str = '_%03d' % i
-                    filenames.append('result' + num_str)
-                    self.io.write(wrp, 'result' + num_str)
-                self.io.write(
-                    # TODO use wrpwrp here
-                    wrappers.Wrapper(
-                        name=self.name,
-                        RESULT_WRAPPERS=filenames
-                    ),
-                    'result'
-                )
         self.time_fin = time.ctime() + '\n'
-        with open(self.logfile, 'w') as f:
-            if self.result:
-                f.write('result available\n')
+        logfile = self.logfile_res if self.result else self.logfile
+        with open(logfile, 'w') as f:
             f.write(self.time_start)
             f.write(self.time_fin)
         super(Tool, self).finished()
@@ -257,7 +249,9 @@ class ToolChainVanilla(ToolChain):
         old_analysis_data = {}
         for key, val in analysis.__dict__.iteritems():
             if not (
-                key[:2] == '__'
+                key[0] == '_'
+                or key == 'results_base'    # must be kept for lookup
+                or key == 'current_result'  # must be kept for lookup
                 or inspect.ismodule(val)
                 or callable(val)
             ):
@@ -318,9 +312,8 @@ def _run_tool_in_worker(arg):
             print '='*80
             _kill_request.value = 1
         _exception_lock.release()
-        return tool.name, False, None
-    result = tool.result if hasattr(tool, 'result') else None
-    return tool.name, chain._reuse, result
+        return tool.name, False
+    return tool.name, chain._reuse
 
 
 class _NoDaemonProcess(multiprocessing.Process):
@@ -344,11 +337,15 @@ class _NoDeamonWorkersPool(multiprocessing.pool.Pool):
 
 class ToolChainParallel(ToolChain):
     """Parallel execution of tools. Tools must not depend on each other."""
-    def _recursive_push_result(self, tool):
+    def _load_results(self, tool):
         analysis.push_tool(tool)
+        if isinstance(tool, Tool):
+            tool.reuse()
         if isinstance(tool, ToolChain):
+            if tool.lazy_eval_tools_func and not tool.tool_chain:
+                tool.add_tools(tool.lazy_eval_tools_func())
             for t in tool.tool_chain:
-                self._recursive_push_result(t)
+                self._load_results(t)
         analysis.pop_tool()
 
     @staticmethod
@@ -413,15 +410,20 @@ class ToolChainParallel(ToolChain):
 
         # run processing
         try:
-            for name, reused, result in result_iter:
+            for name, reused in result_iter:
                 if _kill_request.value > 0:
                     pool.close()
                     os.killpg(os.getpid(), signal.SIGTERM)  # one evil line!
 
-                self.tool_names[name].result = result
                 if not reused:
                     self._reuse = False
-                self._recursive_push_result(self.tool_names[name])
+
+                err_level = monitor.current_error_level
+                try:
+                    monitor.current_error_level = 2
+                    self._load_results(self.tool_names[name])
+                finally:
+                    monitor.current_error_level = err_level
         except KeyboardInterrupt:
             os.killpg(os.getpid(), signal.SIGTERM)  # again!
 
