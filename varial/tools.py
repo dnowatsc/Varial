@@ -13,7 +13,11 @@ FwliteProxy         :ref:`fwliteproxy-module`
 =================== ==========================
 """
 
+from ast import literal_eval
+import subprocess
 import itertools
+import random
+import shutil
 import glob
 import os
 import shutil
@@ -40,6 +44,44 @@ from webcreator import \
     WebCreator
 
 
+class Runner(ToolChain):
+    """Runs tools upon instanciation (including proper folder creation)."""
+    def __init__(self, tool, default_reuse=False):
+        super(Runner, self).__init__(None, [tool], default_reuse)
+        analysis.reset()
+        self.run()
+
+
+class PrintToolTree(Tool):
+    """Calls analysis.print_tool_tree()"""
+    can_reuse = False
+
+    def run(self):
+        analysis.print_tool_tree()
+
+
+class UserInteraction(Tool):
+    def __init__(self,
+                 prompt='Hit enter to continue. Kill me otherwise.',
+                 eval_result=False,
+                 can_reuse=True,
+                 name=None):
+        super(UserInteraction, self).__init__(name)
+        self.prompt = prompt
+        self.eval_result = eval_result
+        self.can_reuse = can_reuse
+
+    def run(self):
+        if self.eval_result:
+            self.message('INFO Input will be evaluated as python code.')
+        if self.can_reuse:
+            self.message('INFO Input might be reused.')
+        res = raw_input(self.prompt+' ')
+        if self.eval_result:
+            res = literal_eval(res)
+        self.result = wrappers.Wrapper(input=res)
+
+
 class HistoLoader(Tool):
     """
     Loads histograms from any rootfile or from fileservice.
@@ -58,27 +100,24 @@ class HistoLoader(Tool):
                  pattern=None,
                  filter_keyfunc=None,
                  hook_loaded_histos=None,
+                 raise_on_empty_result=True,
                  io=pklio,
                  name=None):
         super(HistoLoader, self).__init__(name)
         self.pattern = pattern
         self.filter_keyfunc = filter_keyfunc
         self.hook_loaded_histos = hook_loaded_histos
+        self.raise_on_empty_result = raise_on_empty_result
         self.io = io
 
     def run(self):
         if self.pattern:
-            if not glob.glob(self.pattern):
-                self.message('WARNING No input file found for pattern "%s"'
-                             % self.pattern)
-                wrps = []
-            else:
-                wrps = gen.dir_content(self.pattern)
-                wrps = itertools.ifilter(self.filter_keyfunc, wrps)
-                wrps = gen.load(wrps)
-                if self.hook_loaded_histos:
-                    wrps = self.hook_loaded_histos(wrps)
-                wrps = gen.sort(wrps)
+            wrps = gen.dir_content(self.pattern)
+            wrps = itertools.ifilter(self.filter_keyfunc, wrps)
+            wrps = gen.load(wrps)
+            if self.hook_loaded_histos:
+                wrps = self.hook_loaded_histos(wrps)
+            wrps = gen.sort(wrps)
         else:
             wrps = gen.fs_filter_active_sort_load(self.filter_keyfunc)
             if self.hook_loaded_histos:
@@ -86,7 +125,10 @@ class HistoLoader(Tool):
         self.result = list(wrps)
 
         if not self.result:
-            self.message('WARNING No histograms found.')
+            if self.raise_on_empty_result:
+                raise RuntimeError('ERROR No histograms found.')
+            else:
+                self.message('ERROR No histograms found.')
 
 
 class CopyTool(Tool):
@@ -105,14 +147,38 @@ class CopyTool(Tool):
     def __init__(self, dest, src='',
                  ignore=("*.root", "*.pdf", "*.eps", "*.log", "*.info"),
                  wipe_dest_dir=True,
-                 name=None):
+                 name=None,
+                 use_rsync=False):
         super(CopyTool, self).__init__(name)
         self.dest = dest.replace('~', os.getenv('HOME'))
         self.src = src.replace('~', os.getenv('HOME'))
         self.ignore = ignore
         self.wipe_dest_dir = wipe_dest_dir
+        self.use_rsync = use_rsync
+
+    def def_copy(self, src_objs, dest, ignore):
+        ign_pat = shutil.ignore_patterns(*ignore)
+        for src in src_objs:
+            self.message('INFO Copying: ' + src)
+            if os.path.isdir(src):
+                f = os.path.basename(src)
+                shutil.copytree(
+                    src,
+                    os.path.join(dest, f),
+                    ignore=ign_pat,
+                )
+            else:
+                shutil.copy2(src, dest)
 
     def run(self):
+        if self.use_rsync:
+            self.wipe_dest_dir = False
+            self.ignore = list('--exclude='+w for w in self.ignore)
+            cp_func = lambda w, x, y: os.system('rsync -adz --delete {0} {1} {2}'.format(
+                ' '.join(w), x, ' '.join(y)))
+        else:
+            cp_func = lambda w, x, y: self.def_copy(w, x, y)
+
         if self.src:
             src = os.path.abspath(self.src)
             src_objs = glob.glob(src)
@@ -140,18 +206,7 @@ class CopyTool(Tool):
                     shutil.rmtree(f, True)
 
         # copy
-        ign_pat = shutil.ignore_patterns(*self.ignore)
-        for src in src_objs:
-            self.message('INFO Copying: ' + src)
-            if os.path.isdir(src):
-                f = os.path.basename(src)
-                shutil.copytree(
-                    src,
-                    os.path.join(dest, f),
-                    ignore=ign_pat,
-                )
-            else:
-                shutil.copy2(src, dest)
+        cp_func(src_objs, dest, self.ignore)
 
 
 class ZipTool(Tool):
@@ -169,6 +224,51 @@ class ZipTool(Tool):
         os.system(
             'zip -r %s %s' % (p, p)
         )
+
+
+class CompileTool(Tool):
+    """
+    Calls make in the directories given in paths.
+
+    If compilation was needed (i.e. the output of make was different from
+    "make: Nothing to be done for `all'") wanna_reuse will return False and
+    by that cause all following modules to run.
+
+    :param paths:   list of str: paths where make should be invoked
+    """
+    nothing_done = 'make: Nothing to be done for `all\'.\n'
+
+    def __init__(self, paths):
+        super(CompileTool, self).__init__()
+        self.paths = paths
+
+    def wanna_reuse(self, all_reused_before_me):
+        nothing_compiled_yet = True
+        for path in self.paths:
+            self.message('INFO Compiling in: ' + path)
+            # here comes a workaround: we need to examine the output of make,
+            # but want to stream it directly to the console as well. Hence use
+            # tee and look at the output after make finished.
+            tmp_out = '/tmp/varial_compile_%06i' % random.randint(0, 999999)
+            res = subprocess.call(
+                # PIPESTATUS is needed to get the returncode from make
+                ['make -j 9 | tee %s; test ${PIPESTATUS[0]} -eq 0' % tmp_out],
+                cwd=path,
+                shell=True,
+            )
+            if res:
+                os.remove(tmp_out)
+                raise RuntimeError('Compilation failed in: ' + path)
+            if nothing_compiled_yet:
+                with open(tmp_out) as f:
+                    if not f.readline() == self.nothing_done:
+                        nothing_compiled_yet = False
+            os.remove(tmp_out)
+
+        return nothing_compiled_yet and all_reused_before_me
+
+    def run(self):
+        pass
 
 
 class SampleNormalizer(Tool):
@@ -319,6 +419,76 @@ class GitTagger(Tool):
     #         lastline = filename.readlines[index]
     #     except:
 
+class TexContent(Tool):
+    """
+    Copies (and converts) content for usage in a tex document.
+
+    For blocks of images, includestatements are printed into .tex files.
+    These can be include in the main tex document.
+
+    Image files in eps format are converted to pdf.
+
+    IMPORTANT: absolute paths must be used in ``images`` and ``plain_files``!
+
+    :param images:      ``{'blockname.tex': ['path/to/file1.eps', ...]}``
+    :param plain_files: ``{'target_filename.tex': 'path/to/file1.tex', ...}``
+    :param include_str: e.g. ``r'\includegraphics[width=0.49\textwidth]
+                        {TexContent/%s}'`` where %s will be formatted with the
+                        basename of the image
+    :param dest_dir:    destination directory (default: tool path)
+    """
+    def __init__(self,
+                 images,
+                 plain_files,
+                 include_str,
+                 dest_dir=None,
+                 name=None):
+        super(TexContent, self).__init__(name)
+        self.images = images
+        self.tex_files = plain_files
+        self.include_str = include_str
+        self.dest_dir = dest_dir
+
+    def _join(self, basename):
+        return os.path.join(self.dest_dir, basename)
+
+    @staticmethod
+    def _hashified_filename(path):
+        bname, ext = os.path.splitext(os.path.basename(path))
+        hash_str = '_' + hex(hash(path))[-7:]
+        return bname + hash_str
+
+    def copy_image_files(self):
+        for blockname, blockfiles in self.images.iteritems():
+            hashified_and_path = list(
+                (self._hashified_filename(bf), bf) for bf in blockfiles
+            )
+
+            # copy image files
+            for hashified, path in hashified_and_path:
+                p, ext = os.path.splitext(path)
+                if ext == '.eps':
+                    os.system('ps2pdf -dEPSCrop %s.eps %s.pdf' % (p, p))
+                    ext = '.pdf'
+                elif not ext in ('.pdf', '.png'):
+                    raise RuntimeError(
+                        'Only .eps, .pdf and .png images are supported.')
+                shutil.copy(p+ext, self._join(hashified+ext))
+
+            # make block file
+            with open(self._join(blockname), 'w') as f:
+                for hashified, _ in hashified_and_path:
+                    f.write(self.include_str % hashified + '\n')
+
+    def copy_plain_files(self):
+        for fname, path, in self.tex_files.iteritems():
+            shutil.copy(path, self._join(fname))
+
+    def run(self):
+        if not self.dest_dir:
+            self.dest_dir = self.cwd
+        self.copy_image_files()
+        self.copy_plain_files()
 
 
 def mk_rootfile_plotter(name="RootFilePlots",
@@ -333,6 +503,7 @@ def mk_rootfile_plotter(name="RootFilePlots",
     Make a plotter chain that plots all content of all rootfiles in cwd.
 
     Additional keywords are forwarded to the plotter instanciation.
+    For running the plotter(s), use a Runner.
 
     :param name:                str, name of the folder in which the output is
                                 stored
@@ -360,15 +531,14 @@ def mk_rootfile_plotter(name="RootFilePlots",
         new_plotter_factory = plotter_factory
 
     if combine_files:
-        plotters = [RootFilePlotter(
+        tc = RootFilePlotter(
             pattern,
             new_plotter_factory,
             flat,
             name,
             filter_keyfunc,
             legendnames
-        )]
-        tc = ToolChain(name, plotters)
+        )
     else:
         plotters = list(
             RootFilePlotter(
@@ -381,7 +551,7 @@ def mk_rootfile_plotter(name="RootFilePlots",
             )
             for f in glob.iglob(pattern)
         )
-        tc = ToolChain(name, [ToolChain(name, plotters)])
+        tc = ToolChainParallel(name, plotters)
     return tc
 
 

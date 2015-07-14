@@ -2,10 +2,12 @@
 Baseclasses for tools and toolchains.
 """
 
-import os
-import time
-import inspect
 import multiprocessing.pool
+import inspect
+import signal
+import time
+import sys
+import os
 
 import analysis
 import diskio
@@ -28,8 +30,10 @@ class _ToolBase(object):
         # name
         if not tool_name:
             self.name = self.__class__.__name__
-        else:
+        elif isinstance(tool_name, str):
             self.name = tool_name
+        else:
+            raise RuntimeError('tool_name must be string or None.')
 
         # messenger
         self.message = monitor.connect_object_with_messenger(self)
@@ -42,13 +46,17 @@ class _ToolBase(object):
         analysis.pop_tool()
 
     def reset(self):
-        pass
+        pass  # see metaclass
 
     def update(self):
-        pass
+        pass  # see metaclass
+
+    def tool_paths(self):
+        """Return a list of tool paths for all children."""
+        raise RuntimeError('_ToolBase.tool_paths() should not be called.')
 
     def wanna_reuse(self, all_reused_before_me):
-        """If True is returned, run is not called."""
+        """If True is returned, run() will not be called."""
         return self.can_reuse and all_reused_before_me
 
     def starting(self):
@@ -75,6 +83,7 @@ class Tool(_ToolBase):
         self.cwd = None
         self.result = None
         self.logfile = None
+        self.logfile_res = None
         self.time_start = None
         self.time_fin = None
 
@@ -85,64 +94,60 @@ class Tool(_ToolBase):
             self.reset()  # see metaclass
         res = super(Tool, self).__enter__()
         self.cwd = analysis.cwd
-        self.logfile = os.path.join(self.cwd, '%s.log' % self.name)
+        self.logfile = os.path.join(
+            self.cwd, '%s.log' % self.name)
+        if self.can_reuse:
+            self.logfile_res = os.path.join(
+                self.cwd, '%s (result available).log' % self.name)
+        else:
+            self.logfile_res = self.logfile
         return res
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.cwd = None
         self.logfile = None
+        self.logfile_res = None
         super(Tool, self).__exit__(exc_type, exc_val, exc_tb)
 
+    def tool_paths(self):
+        """Return a list of tool paths for all children."""
+        return [self.name]
+
     def wanna_reuse(self, all_reused_before_me):
-        if (super(Tool, self).wanna_reuse(all_reused_before_me)
-            and os.path.exists(self.logfile)
-        ):
-            with open(self.logfile) as f:
-                if f.readline() == 'result available\n':
-                    if os.path.exists(os.path.join(self.cwd, 'result.info')):
-                        return True
-                else:
-                    return True
+        if super(Tool, self).wanna_reuse(all_reused_before_me):
+            if os.path.exists(self.logfile):
+                return True
+            if (os.path.exists(self.logfile_res)
+                and self.io.exists('result')):
+                return True
         return False
 
     def reuse(self):
         self.message('INFO reusing...')
-        res = self.io.get('result')
-        if res:
-            if hasattr(res, 'RESULT_WRAPPERS'):
-                self.result = list(self.io.read(f) for f in res.RESULT_WRAPPERS)
-            else:
-                self.result = res
+        with self.io.block_of_files:
+            self.result = self.io.get('result')
 
     def starting(self):
         super(Tool, self).starting()
         self.time_start = time.ctime() + '\n'
         if os.path.exists(self.logfile):
             os.remove(self.logfile)
+        if os.path.exists(self.logfile_res):
+            os.remove(self.logfile_res)
 
     def finished(self):
-        with diskio.block_of_files:
-            if isinstance(self.result, wrappers.Wrapper):
+        if any(isinstance(self.result, t) for t in (list, tuple)):
+            try:
+                self.result = wrappers.WrapperWrapper(self.result)
+            except TypeError:
+                pass
+        if isinstance(self.result, wrappers.Wrapper):
+            with self.io.block_of_files:
                 self.result.name = self.name
                 self.io.write(self.result, 'result')
-            elif any(isinstance(self.result, t) for t in (list, tuple)):
-                filenames = []
-                for i, wrp in enumerate(self.result):
-                    num_str = '_%03d' % i
-                    filenames.append('result' + num_str)
-                    self.io.write(wrp, 'result' + num_str)
-                self.io.write(
-                    # TODO use wrpwrp here
-                    wrappers.Wrapper(
-                        name=self.name,
-                        RESULT_WRAPPERS=filenames
-                    ),
-                    'result'
-                )
         self.time_fin = time.ctime() + '\n'
-        with open(self.logfile, 'w') as f:
-            if self.result:
-                f.write('result available\n')
+        logfile = self.logfile_res if self.result else self.logfile
+        with open(logfile, 'w') as f:
             f.write(self.time_start)
             f.write(self.time_fin)
         super(Tool, self).finished()
@@ -153,11 +158,16 @@ class Tool(_ToolBase):
 class ToolChain(_ToolBase):
     """Executes PostProcTools."""
 
-    def __init__(self, name=None, tools=None, default_reuse=False):
+    def __init__(self,
+                 name=None,
+                 tools=None,
+                 default_reuse=False,
+                 lazy_eval_tools_func=None):
         super(ToolChain, self).__init__(name)
         self._reuse = default_reuse
         self.tool_chain = []
         self.tool_names = {}
+        self.lazy_eval_tools_func = lazy_eval_tools_func
         if tools:
             self.add_tools(tools)
 
@@ -180,6 +190,11 @@ class ToolChain(_ToolBase):
         self.tool_names[tool.name] = tool
         self.tool_chain.append(tool)
 
+    def tool_paths(self):
+        return list(os.path.join(self.name, p)
+                    for t in self.tool_chain
+                    for p in t.tool_paths())
+
     def _run_tool(self, tool):
         with tool as t:
             if tool.wanna_reuse(self._reuse):
@@ -193,11 +208,22 @@ class ToolChain(_ToolBase):
 
             t._reuse = self._reuse
             t.starting()
-            t.run()
+            try:
+                t.run()
+            except:
+                etype, evalue, etb = sys.exc_info()
+                if not 'exception occured at path (class): ' in evalue.message:
+                    evalue = etype(
+                        '%s\nexception occured at path (class): %s (%s)' % (
+                            evalue, analysis.cwd[:-1], t.__class__.__name__)
+                    )
+                raise etype, evalue, etb
             t.finished()
             self._reuse = t._reuse
 
     def run(self):
+        if self.lazy_eval_tools_func:
+            self.add_tools(self.lazy_eval_tools_func())
         for tool in self.tool_chain:
             self._run_tool(tool)
 
@@ -225,7 +251,9 @@ class ToolChainVanilla(ToolChain):
         old_analysis_data = {}
         for key, val in analysis.__dict__.iteritems():
             if not (
-                key[:2] == '__'
+                key[0] == '_'
+                or key == 'results_base'    # must be kept for lookup
+                or key == 'current_result'  # must be kept for lookup
                 or inspect.ismodule(val)
                 or callable(val)
             ):
@@ -261,41 +289,33 @@ class ToolChainVanilla(ToolChain):
 ######################################################### ToolChainParallel ###
 _n_parallel_workers = None
 _n_parallel_workers_lock = None
-
-
-def parallel_worker_start():
-    if not _n_parallel_workers:
-        return
-
-    while _n_parallel_workers.value >= settings.max_num_processes:
-        time.sleep(0.5)
-    _n_parallel_workers_lock.acquire()
-    _n_parallel_workers.value += 1
-    _n_parallel_workers_lock.release()
-
-
-def parallel_worker_done():
-    if not _n_parallel_workers:
-        return
-
-    diskio.close_open_root_files()
-    _n_parallel_workers_lock.acquire()
-    _n_parallel_workers.value -= 1
-    _n_parallel_workers_lock.release()
+_exception_lock = None  # exception printing should not be mingled
+_kill_request = None  # initialized to 0, if > 0, the process group is killed
 
 
 def _run_tool_in_worker(arg):
     chain_path, tool_index = arg
     chain = analysis.lookup_tool(chain_path)
     tool = chain.tool_chain[tool_index]
-    if not isinstance(tool, ToolChain):
-        parallel_worker_start()
+    try:
         chain._run_tool(tool)
-        parallel_worker_done()
-    else:
-        chain._run_tool(tool)
-    result = tool.result if hasattr(tool, 'result') else None
-    return tool.name, chain._reuse, result
+    except KeyboardInterrupt:  # these will be handled from main process
+        return tool.name, False, None
+    except:  # print exception and request termination
+        _exception_lock.acquire()
+        if _kill_request.value == 0:
+            print '='*80
+            print 'EXCEPTION IN PARALLEL EXECUTION START'
+            print '='*80
+            import traceback
+            traceback.print_exception(*sys.exc_info())
+            print '='*80
+            print 'EXCEPTION IN PARALLEL EXECUTION END'
+            print '='*80
+            _kill_request.value = 1
+        _exception_lock.release()
+        return tool.name, False
+    return tool.name, chain._reuse
 
 
 class _NoDaemonProcess(multiprocessing.Process):
@@ -306,6 +326,12 @@ class _NoDaemonProcess(multiprocessing.Process):
         pass
     daemon = property(_get_daemon, _set_daemon)
 
+    def run(self):
+        try:
+            super(_NoDaemonProcess, self).run()
+        except (KeyboardInterrupt, IOError):
+            exit(-1)
+
 
 class _NoDeamonWorkersPool(multiprocessing.pool.Pool):
     Process = _NoDaemonProcess
@@ -313,28 +339,70 @@ class _NoDeamonWorkersPool(multiprocessing.pool.Pool):
 
 class ToolChainParallel(ToolChain):
     """Parallel execution of tools. Tools must not depend on each other."""
-    def _recursive_push_result(self, tool):
+    def _load_results(self, tool):
         analysis.push_tool(tool)
+        if isinstance(tool, Tool):
+            tool.reuse()
         if isinstance(tool, ToolChain):
+            if tool.lazy_eval_tools_func and not tool.tool_chain:
+                tool.add_tools(tool.lazy_eval_tools_func())
             for t in tool.tool_chain:
-                self._recursive_push_result(t)
+                self._load_results(t)
         analysis.pop_tool()
 
+    @staticmethod
+    def _parallel_worker_start():
+        if not _n_parallel_workers:
+            return
+
+        while _n_parallel_workers.value >= settings.max_num_processes:
+            time.sleep(0.5)
+        _n_parallel_workers_lock.acquire()
+        _n_parallel_workers.value += 1
+        _n_parallel_workers_lock.release()
+
+    @staticmethod
+    def _parallel_worker_done():
+        if not _n_parallel_workers:
+            return
+
+        diskio.close_open_root_files()
+        _n_parallel_workers_lock.acquire()
+        _n_parallel_workers.value -= 1
+        _n_parallel_workers_lock.release()
+
+    def _run_tool(self, tool):
+        if isinstance(tool, ToolChainParallel):
+            super(ToolChainParallel, self)._run_tool(tool)
+        else:
+            self._parallel_worker_start()
+            super(ToolChainParallel, self)._run_tool(tool)
+            self._parallel_worker_done()
+
     def run(self):
-        global _n_parallel_workers, _n_parallel_workers_lock
+        global _n_parallel_workers, \
+            _n_parallel_workers_lock, \
+            _exception_lock, \
+            _kill_request
 
         if not settings.use_parallel_chains or settings.max_num_processes == 1:
             return super(ToolChainParallel, self).run()
 
+        if self.lazy_eval_tools_func:
+            self.add_tools(self.lazy_eval_tools_func())
+
         if not self.tool_chain:
             return
 
-        #  prepare and fork processes
+        # prepare parallelism (only once for the all processes)
         if not _n_parallel_workers:
             manager = multiprocessing.Manager()
             _n_parallel_workers = manager.Value('i', 0)
             _n_parallel_workers_lock = manager.Lock()
+            _exception_lock = manager.Lock()
+            _kill_request = manager.Value('i', 0)
 
+        # prepare multiprocessing
         diskio.close_open_root_files()
         n_tools = len(self.tool_chain)
         my_path = "/".join(t.name for t in analysis._tool_stack)
@@ -342,12 +410,24 @@ class ToolChainParallel(ToolChain):
         pool = _NoDeamonWorkersPool(min(n_tools, settings.max_num_processes))
         result_iter = pool.imap_unordered(_run_tool_in_worker, tool_index_list)
 
-        # start processing
-        for name, reused, result in result_iter:
-            self.tool_names[name].result = result
-            if not reused:
-                self._reuse = False
-            self._recursive_push_result(self.tool_names[name])
+        # run processing
+        try:
+            for name, reused in result_iter:
+                if _kill_request.value > 0:
+                    pool.close()
+                    os.killpg(os.getpid(), signal.SIGTERM)  # one evil line!
+
+                if not reused:
+                    self._reuse = False
+
+                err_level = monitor.current_error_level
+                try:
+                    monitor.current_error_level = 2
+                    self._load_results(self.tool_names[name])
+                finally:
+                    monitor.current_error_level = err_level
+        except KeyboardInterrupt:
+            os.killpg(os.getpid(), signal.SIGTERM)  # again!
 
         # TODO: return results for ParallelToolChains in ParallelToolChains
 

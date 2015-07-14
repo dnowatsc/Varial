@@ -18,6 +18,7 @@ import itertools
 
 import analysis
 import diskio
+import monitor
 import wrappers
 import operator
 
@@ -37,12 +38,30 @@ def debug_printer(iterable, print_obj=True):
     Print objects and their type on flying by. Object printing can be disabled.
 
     :param iterable:    An iterable with objects
+    :param print_obj:   bool, print whole object
     :yields:            same as input
     """
     for obj in iterable:
-        print 'DEBUG: debug_printer: obj type: ', type(obj)
+        monitor.message('generators.debug_printer',
+                        'INFO: obj type: %s' % type(obj))
         if print_obj:
-            print 'DEBUG: debug_printer: obj:      ', obj
+            monitor.message('generators.debug_printer',
+                            'obj:      %s' % obj)
+        yield obj
+
+
+def attribute_printer(iterable, attr):
+    """
+    Print an attribute of passing objects.
+
+    :param iterable:    An iterable of wrappers
+    :param attr:        str, name of the attribute to be printed
+    :yields:            same as input
+    """
+    for obj in iterable:
+        monitor.message('generators.in_file_path_printer',
+                        'INFO: %s: %s'
+                        % (attr, getattr(obj, attr, '<not defined>')))
         yield obj
 
 
@@ -118,9 +137,21 @@ def consume_n_count(iterable):
 
 
 def filter_active_samples(wrps):
+    """
+    Check if wrp.sample is in list of active samples (analysis.active_samples).
+
+    :param wrps:    Wrapper iterable
+    :returns:       generator object
+    """
+    no_active_smpls = not analysis.active_samples
+    if no_active_smpls:
+        monitor.message('generators.filter_active_samples',
+                        'WARNING No active samples defined. Will yield all.')
     return itertools.ifilter(
-        lambda w: (not analysis.active_samples)
-                  or w.sample in analysis.active_samples,
+        lambda w: no_active_smpls or (
+                      hasattr(w, 'sample')
+                      and w.sample in analysis.active_samples
+                  ),
         wrps
     )
 
@@ -143,7 +174,8 @@ def sort(wrps, key_list=None):
         try:
             wrps = sorted(wrps, key=operator.attrgetter(key))
         except AttributeError:
-            print 'WARNING Sorting by "%s" failed.' % key
+            monitor.message('generators.sort',
+                            'WARNING Sorting by "%s" failed.' % key)
     return wrps
 
 
@@ -193,10 +225,31 @@ def split_data_bkg_sig(wrps):
     :param wrps:        Wrapper iterable
     :returns:           three wrapper iterators: ``(data, bkg, sig)``
     """
+    class DataTypeTracker(object):
+        def __init__(self):
+            self.using_real_data = False
+            self.using_pseudo_data = False
+
+        def __call__(self, w):
+            if ((w.is_data and self.using_pseudo_data)
+                    or (w.is_pseudo_data and self.using_real_data)):
+                monitor.message(
+                    'generators.split_data_bkg_sig',
+                    'WARNING I have data and psuedo-data in the same stream!'
+                )
+            if w.is_data:
+                self.using_real_data = True
+                return True
+            if w.is_pseudo_data:
+                self.using_pseudo_data = True
+                return True
+            return False
+
+    is_data_type_tracking = DataTypeTracker()
     wrps_a, wrps_b, wrps_c = itertools.tee(wrps, 3)
-    dat = itertools.ifilter(lambda w: w.is_data, wrps_a)
+    dat = itertools.ifilter(lambda w: is_data_type_tracking(w), wrps_a)
     sig = itertools.ifilter(lambda w: w.is_signal, wrps_b)
-    bkg = itertools.ifilter(lambda w: not (w.is_data or w.is_signal), wrps_c)
+    bkg = itertools.ifilter(lambda w: w.is_background, wrps_c)
     return dat, bkg, sig
 
 
@@ -300,8 +353,9 @@ def gen_make_eff_graphs(wrps,
                         postfix_sub='_sub',
                         postfix_tot='_tot',
                         new_postfix='_eff',
+                        yield_everything=False,
                         pair_func=lambda w, l: w.in_file_path[:-l],
-                        yield_everything=False):
+                        eff_func=op.eff):
     """
     Makes efficiency graphs and interleaves them into a sorted stream.
 
@@ -334,13 +388,13 @@ def gen_make_eff_graphs(wrps,
         if wrp.name.endswith(postfix_sub):
             t = pair_func(wrp, len_postfix_sub)
             if t in tots:
-                res.append(rename(op.eff((wrp, tots.pop(t)))))
+                res.append(rename(eff_func((wrp, tots.pop(t)))))
             else:
                 subs[t] = wrp
         elif wrp.name.endswith(postfix_tot):
             t = pair_func(wrp, len_postfix_tot)
             if t in subs:
-                res.append(rename(op.eff((subs.pop(t), wrp))))
+                res.append(rename(eff_func((subs.pop(t), wrp))))
             else:
                 tots[t] = wrp
         elif not yield_everything:  # do not yield everything twice
@@ -387,6 +441,27 @@ def gen_make_th2_projections(wrps, keep_th2=True):
 
 ############################################################### load / save ###
 import settings
+import glob
+import os
+
+
+def resolve_file_pattern(pattern='./*.root'):
+    """
+    Resolves search pattern(s) for files.
+
+    Raises RuntimeError if no files could be found for a pattern.
+
+    :param pattern: string or list of strings.
+    :returns:       List of filenames
+    """
+    if type(pattern) is str:
+        pattern = [pattern]
+    result = list(glob.glob(pat) for pat in pattern)
+    for pat, res in itertools.izip(pattern, result):
+        if not res or not all(os.path.isfile(f) for f in res):
+            raise RuntimeError('No file(s) found for pattern: %s' % pat)
+
+    return list(itertools.chain.from_iterable(result))
 
 
 def fs_content():
@@ -399,13 +474,13 @@ def fs_content():
         yield alias
 
 
-def dir_content(dir_path='./*.root'):
+def dir_content(pattern='./*.root'):
     """
     Proxy of diskio.generate_aliases(directory)
 
     :yields:   Alias
     """
-    return diskio.generate_aliases(dir_path)
+    return diskio.generate_aliases_list(resolve_file_pattern(pattern))
 
 
 def load(aliases):
@@ -443,11 +518,7 @@ def save(wrps, filename_func, suffices=None, write_complete_wrp=False):
         if write_complete_wrp:
             diskio.write(wrp, filename, suffices)
         else:
-            filename = diskio.prepare_filename(wrp, filename)
-            with open(filename+'.info', 'w') as f:
-                diskio._write_wrapper_info(wrp, f)
-            for suffix in suffices:
-                wrp.primary_object().SaveAs(filename + suffix)
+            diskio.small_write(wrp, filename, suffices)
         yield wrp
 
 
@@ -584,7 +655,7 @@ def build_canvas(bldrs):
         yield bldr.build_canvas()
 
 
-def switch_log_scale(cnvs, y_axis=True, x_axis=False):
+def switch_log_scale(cnvs, x_axis=False, y_axis=True):
     """
     Sets main_pad in canvases to logscale.
     
@@ -600,7 +671,9 @@ def switch_log_scale(cnvs, y_axis=True, x_axis=False):
         else:
             cnv.main_pad.SetLogx(0)
         if y_axis:
-            cnv.first_drawn.SetMinimum(cnv.y_min_gr_0 * 0.5)
+            min_val = cnv.y_min_gr_0 * 0.5
+            min_val = max(min_val, 1e-9)
+            cnv.first_drawn.SetMinimum(min_val)
             cnv.main_pad.SetLogy(1)
         else:
             cnv.first_drawn.SetMinimum(cnv.y_min)
@@ -707,9 +780,8 @@ def mc_stack_n_data_sum(wrps, merge_mc_key_func=None, use_all_data_lumi=False):
         try:
             dat_sum = op.sum(dat)
         except op.TooFewWrpsError:
-            if settings.debug_mode:
-                print 'DEBUG generators.mc_stack_n_data_sum(..): '\
-                      'No data histograms present!'
+            monitor.message('generators.mc_stack_n_data_sum',
+                            'DEBUG No data histograms present!')
         if dat_sum and not use_all_data_lumi:
             data_lumi = op.lumi(dat_sum)
         else:
@@ -730,16 +802,15 @@ def mc_stack_n_data_sum(wrps, merge_mc_key_func=None, use_all_data_lumi=False):
             else:
                 bkg_stk = op.stack(bkg)
         except op.TooFewWrpsError:
-            if settings.debug_mode:
-                print 'DEBUG generators.mc_stack_n_data_sum(..): '\
-                      'No background histograms present!'
+            monitor.message('generators.mc_stack_n_data_sum',
+                            'DEBUG No background histograms present!')
 
         # signal
         sig = apply_linecolor(sig)
         sig_lst = list(sig)
-        if not sig_lst and settings.debug_mode:
-            print 'DEBUG generators.mc_stack_n_data_sum(..): '\
-                  'No signal histograms present!'
+        if not sig_lst:
+            monitor.message('generators.mc_stack_n_data_sum',
+                            'DEBUG No signal histograms present!')
 
         # return in order for plotting: bkg, signals, data
         res = [bkg_stk] + sig_lst + [dat_sum]

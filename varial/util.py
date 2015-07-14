@@ -1,10 +1,11 @@
-import copy
-import inspect
-import math
 from ROOT import TH1D
+import functools
+import inspect
+import copy
+import math
 
 
-def list2histogram(values, name="histo", title=None, n_bins=0):
+def list2histogram(values, name='histo', title=None, n_bins=0):
     """Makes histogram from list of values."""
     mi, ma, n = min(values), max(values), len(values)
     val_range = ma - mi
@@ -51,7 +52,7 @@ def deepish_copy(obj):
         return dict((k, deepish_copy(v)) for k, v in obj.iteritems())
     if type(obj) == set:
         return set(deepish_copy(o) for o in obj)
-    if hasattr(obj, "__dict__"):
+    if hasattr(obj, '__dict__'):
         cp = copy.copy(obj)
         cp.__dict__.clear()
         for k, v in obj.__dict__.iteritems():
@@ -65,6 +66,7 @@ _instance_init_states = {}
 
 
 def _wrap_init(original__init__):
+    @functools.wraps(original__init__)
     def init_hook(inst, *args, **kws):
         if inst not in _instance_init_states:
             _instance_init_states[inst] = None
@@ -134,12 +136,12 @@ class Decorator(object):
 
     >>> class Foo(object):
     ...     def f1(self):
-    ...         print "in Foo.f1()"
+    ...         print 'in Foo.f1()'
     ...     def f2(self):
-    ...         print "in Foo.f2()"
+    ...         print 'in Foo.f2()'
     >>> class FooDecorator(Decorator):
     ...     def f2(self):
-    ...         print "in FooDecorator.f2()"
+    ...         print 'in FooDecorator.f2()'
     ...         self.decoratee.f2() # VERY IMPORTANT !! pass on the call...
     >>> x = Foo()
     >>> y = FooDecorator(x)
@@ -161,7 +163,7 @@ class Decorator(object):
         self.__dict__['dec_par'].update(kws)
         if not target:
             return
-        self.__dict__['decoratee']  = target
+        self.__dict__['decoratee'] = target
 
         # this is automatically forwarded to the inner decoratee
         target._outermost_decorator = self
@@ -197,6 +199,9 @@ class Decorator(object):
         Decorator.__init__(self, target, dd)
         return self
 
+    def __str__(self):
+        return 'Decorator "%s" on\n%s' % (str(type(self)), str(self.decoratee))
+
     def get_decorator(self, klass):
         """
         Runs over all inner decorators, returns the match.
@@ -221,7 +226,7 @@ class Decorator(object):
         Inserts decorator right after me.
         """
         assert issubclass(new_dec, Decorator)
-        self.__dict__["decoratee"] = new_dec(self.decoratee)
+        self.__dict__['decoratee'] = new_dec(self.decoratee)
         return self.decoratee
 
     def replace_decorator(self, old, new_dec):
@@ -255,19 +260,15 @@ class Decorator(object):
         """
         For debugging.
         """
-        decs  = ""
+        decs  = ''
         inner = self
         while isinstance(inner, Decorator):
             decs += inner.__class__.__name__ + "\n"
             inner = inner.decoratee
-        self.message.emit(
-            self,
-            "DEBUG _______________(inner)_decorator_chain_______________"
-            + "\n"
-            + decs
-        )
+        self.message(
+            'DEBUG _____________(inner)_decorator_chain_____________\n' + decs)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     import doctest
     doctest.testmod()

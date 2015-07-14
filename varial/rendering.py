@@ -263,6 +263,7 @@ class CanvasBuilder(object):
         self.name = kws.get('name', rnds[0].name)
         self.title = kws.get('title', rnds[0].title)
         self.in_file_path = kws.get('in_file_path', rnds[0].in_file_path)
+        self.canvas_wrp = None
 
     def __del__(self):
         """Remove the pads first."""
@@ -348,19 +349,23 @@ class CanvasBuilder(object):
         canvas = self.canvas
         canvas.Modified()
         canvas.Update()
-        wrp = wrappers.CanvasWrapper(
-            canvas,
-            main_pad    = self.main_pad,
-            second_pad  = self.second_pad,
-            legend      = self.legend,
-            first_drawn = self.first_drawn,
-            x_bounds    = self.x_bounds,
-            y_bounds    = self.y_bounds,
-            y_min_gr_0  = self.y_min_gr_zero,
-            history     = self._track_canvas_history(),
-            _renderers   = self.renderers,
-            **self.kws
-        )
+        kws = self.renderers[0].all_info()  # TODO only common info
+        for attr in ('is_signal', 'is_data', 'is_pseudo_data'):
+            if attr in kws:
+                del kws[attr]
+        kws.update(self.kws)
+        kws.update({
+            'main_pad'    : self.main_pad,
+            'second_pad'  : self.second_pad,
+            'legend'      : self.legend,
+            'first_drawn' : self.first_drawn,
+            'x_bounds'    : self.x_bounds,
+            'y_bounds'    : self.y_bounds,
+            'y_min_gr_0'  : self.y_min_gr_zero,
+            'history'     : self._track_canvas_history(),
+            '_renderers'  : self.renderers,
+        })
+        wrp = wrappers.CanvasWrapper(canvas, **kws)
         self._del_builder_refs()
         self.canvas_wrp = wrp
         return wrp
@@ -396,7 +401,7 @@ class TitleBox(util.Decorator):
 
 class TextBox(util.Decorator):
     """Draw Textboxes individually by renderer name"""
-    def __init__(self, inner, dd=True, **kws):
+    def __init__(self, inner=None, dd=True, **kws):
         super(TextBox, self).__init__(inner, dd, **kws)
         assert('textbox' in self.dec_par)
 
@@ -412,6 +417,9 @@ class Legend(util.Decorator):
     Takes entries from ``self.main_pad.BuildLegend()`` .
     The box height is adjusted by the number of legend entries.
     No border or shadow are printed. See __init__ for keywords.
+
+    You can set ``draw_option_legend`` on a wrapper. If it evaluates to
+    ``False`` (like an empty string), the item will be removed from the legend.
     """
     def __init__(self, inner, dd='True', **kws):
         super(Legend, self).__init__(inner, dd)
@@ -437,7 +445,8 @@ class Legend(util.Decorator):
                     if hasattr(rnd, 'draw_option_legend'):
                         draw_opt = rnd.draw_option_legend
                     break
-            entries.append((obj, label, draw_opt))
+            if draw_opt:
+                entries.append((obj, label, draw_opt))
         return entries
 
     def _calc_bounds(self, n_entries):

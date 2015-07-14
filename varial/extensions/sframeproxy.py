@@ -2,243 +2,133 @@
 Host sframe processes in a toolchain.
 """
 
-import glob
-import json
+import xml.etree.cElementTree as ElementTree
 import subprocess
 import time
 import os
 join = os.path.join
+basename = os.path.basename
 
 from varial import analysis
 from varial import diskio
+from varial import pklio
 from varial import settings
-from varial import sample
 from varial import toolinterface
 from varial import wrappers
 
 
-class SFrameProcess(toolinterface.Tool):
+class SFrame(toolinterface.Tool):
     """
     This class hosts a sframe process.
 
     sframe output is streamed into a logfile.
     """
+    io = pklio
 
-    def __init__(self, sample_inst, cfg_filename):
-        name = sample_inst.name
-        super(SFrameProcess, self).__init__(name)
+    def __init__(self,
+                 cfg_filename,
+                 xml_tree_callback=None,
+                 add_aliases_to_analysis=True,
+                 halt_on_exception=True,
+                 samplename_func=lambda w: basename(w.file_path).split('.')[3],
+                 name=None):
+        super(SFrame, self).__init__(name)
+        self.cfg_filename           = cfg_filename
+        self.xml_tree_callback      = xml_tree_callback
+        self.add_aliases_to_analysis= add_aliases_to_analysis
+        self.halt_on_exception      = halt_on_exception
+        self.samplename_func        = samplename_func
+        self.log_file               = None
+        self.log_filename           = 'sframe_output.log'
+        self.private_conf           = 'conf.xml'
+        self.subprocess             = None
 
-        assert isinstance(sample_inst, sample.Sample)
-        self.sample             = sample_inst
-        self.cfg_filename       = cfg_filename
-        self.log_file           = None
-        self.log_filename       = join(analysis.cwd, 'sframe_output.log')
-        self.conf_filename      = join(analysis.cwd, 'conf.xml')
-        self.result_filename    = join(analysis.cwd, 'result.info')
-        self.output_filename    = join(analysis.cwd, 'output.root')
-        self.subprocess         = None
-
-    def wanna_reuse(self, all_reused_before_me):
-        if not super(SFrameProcess, self).wanna_reuse(all_reused_before_me):
-            return False
-
-        if not all(os.path.exists(f) for f in (
-            self.log_filename,
-            self.conf_filename,
-            self.output_filename,
-        )):
-            return False
-
-        old_result = self.io.get('result')
-        if (hasattr(old_result, 'exit_code')
-            and not int(old_result.exit_code) == 0
-        ):
-            return True
-        return False
+    def _push_aliases_to_analysis(self):
+        if self.add_aliases_to_analysis:
+            analysis.fs_aliases += self.result.wrps
 
     def prepare_run_conf(self):
-        pass
+        if self.xml_tree_callback:
+            tree = ElementTree.parse(self.cfg_filename)
+            self.xml_tree_callback(tree)
+            with open(self.cfg_filename) as inp:
+                dtd_header = inp.readline() + inp.readline()
+            with open(os.path.join(self.cwd, self.private_conf), "w") as f:
+                f.write(dtd_header + '\n')
+                tree.write(f)
+            # TODO make that nicer sometime...
+            os.system('cp %s %s' % (
+                os.path.dirname(self.cfg_filename) + '/JobConfig.dtd',
+                self.cwd + '/JobConfig.dtd'
+            ))
+        else:
+            self.private_conf = self.cfg_filename
 
     def make_result(self):
-        if settings.recieved_sigint:
-            return
-
-        self.result = wrappers.Wrapper(
+        def add_sample_name(w):
+            w.sample = self.samplename_func(w)
+            return w
+        wrps = diskio.generate_aliases(self.cwd + '*.root')
+        wrps = list(add_sample_name(w) for w in wrps)
+        self.result = wrappers.WrapperWrapper(
+            wrps,
             exit_code=self.subprocess.returncode,
             cwd=self.cwd,
             log_file=self.log_filename,
-            conf_filename=self.conf_filename,
-            output=self.output_filename,
+            conf_filename=self.private_conf,
         )
+        self._push_aliases_to_analysis()
 
     def successful(self):
         return (
-            self.time_fin
+            self.subprocess
             and self.subprocess.returncode == 0
             and not settings.recieved_sigint
         )
 
     def finalize(self):
+        err_msg = 'SFrame execution exited with error.'
         if self.subprocess:
+            err_msg += ' (ret: %s)' % str(self.subprocess.returncode)
             if self.subprocess.returncode == 0 and self.log_file:
                 self.log_file.close()
                 self.log_file = None
-                with open(self.log_filename, "r") as f:
-                    if 'Exception ------' in "".join(f.readlines()):  # TODO: check for sframe error message
-                        self.subprocess.returncode = -1
+
         if self.log_file:
             self.log_file.close()
             self.log_file = None
+
+        if self.successful():
             self.make_result()
-
-    def run(self):
-        self.time_start = time.ctime()
-
-        # run sframe
-        self.log_file = open(self.log_filename, "w")
-        self.subprocess = subprocess.Popen(
-            ["sframe_main", self.conf_filename],
-            stdout=self.log_file,
-            stderr=subprocess.STDOUT
-        )
-
-        # finalizes
-        self.finalize()
-
-
-class SFrameProxy(toolinterface.Tool):
-    """
-    Tool to embed sframe execution into varial toolchains.
-
-    For every job, a seperate xml config is writen, that mirrors the given
-    main config file.
-
-    :param cfg_filename:        str, path to cmsRun-config,
-                                e.g. `MySubSystem.MyPackage.config_cfg'`
-    :param use_file_service:    bool, fileservice in CMSSW config?
-                                default: ``True``
-    :param output_module_name:  str, name of output module in CMSSW config
-                                default: ``out``
-    :param common_builtings:    dict, write to ``__builtin__`` section of the
-                                config
-                                default: ``None``
-    :param name:                str, tool name
-    """
-    def __init__(self,
-                 cfg_filename,
-                 use_file_service=True,
-                 output_module_name="out",
-                 common_builtins=None,
-                 name=None):
-        super(SFrameProxy, self).__init__(name)
-        self.waiting_pros = []
-        self.running_pros = []
-        self.finished_pros = []
-        self.failed_pros = []
-        self.cfg_filename = cfg_filename
-        self.use_file_service = use_file_service
-        self.output_module_name = output_module_name
-        self.common_builtins = common_builtins or {}
-        self.try_reuse = settings.try_reuse_results
-
-    def wanna_reuse(self, all_reused_before_me):
-        self._setup_processes()
-
-        if settings.only_reload_results:
-            return True
-
-        return not bool(self.waiting_pros)
+        elif self.halt_on_exception or settings.recieved_sigint:
+            raise RuntimeError(err_msg)
+        else:
+            self.message('WARNING ' + err_msg)
 
     def reuse(self):
-        super(SFrameProxy, self).reuse()
-        self._finalize()
+        super(SFrame, self).reuse()
+        self._push_aliases_to_analysis()
 
     def run(self):
-        if settings.suppress_eventloop_exec:
-            self.message(
-                self, "INFO settings.suppress_eventloop_exec == True, pass...")
-            return
+        self.prepare_run_conf()
 
-        # TODO do sframe compilation
+        log_path = os.path.join(self.cwd, self.log_filename)
+        cmd = ['sframe_main', self.private_conf]
+        self.log_file = open(log_path, "w")
+        self.message('INFO Starting SFrame with command:')
+        self.message('INFO `%s`' % " ".join(cmd))
+        self.message(
+            'INFO Follow with `tail -f %s`.'
+            % os.path.abspath(log_path)
+        )
+        self.subprocess = subprocess.Popen(
+            cmd,
+            stdout=self.log_file,
+            stderr=subprocess.STDOUT,
+            cwd=self.cwd,
+        )
+        while self.subprocess.returncode == None:
+            self.subprocess.poll()
+            time.sleep(1)
 
-        if not (settings.not_ask_execute or raw_input(
-                "Really run these cmsRun jobs:\n   "
-                + ",\n   ".join(map(str, self.waiting_pros))
-                + ('\nusing %i cores' % settings.max_num_processes)
-                + "\n?? (type 'yes') "
-                ) == "yes"):
-            return
-
-        self._handle_processes()
-        sig_term_sent = False
-        while self.running_pros:
-            if settings.recieved_sigint and not sig_term_sent:
-                self.abort_all_processes()
-                sig_term_sent = True
-            time.sleep(0.2)
-            self._handle_processes()
-
-        self.result = wrappers.Wrapper(
-            finished_procs=list(p.name for p in self.finished_pros))
-        self._finalize()
-
-    def _setup_processes(self):
-        for d in ('logs', 'confs', 'fs', 'report'):
-            path = join(self.cwd, d)
-            if not os.path.exists(path):
-                os.mkdir(path)
-
-        for name, smpl in analysis.all_samples.iteritems():
-            process = SFrameProcess(smpl, self.try_reuse, self.cfg_filename)
-            if process.check_reuse_possible(self.use_file_service):
-                self.finished_pros.append(process)
-            else:
-                self.waiting_pros.append(process)
-                monitor.proc_enqueued(process)
-
-    def _handle_processes(self):
-        # start processing
-        if (len(self.running_pros) < settings.max_num_processes
-                and self.waiting_pros):
-            process = self.waiting_pros.pop(0)
-            process.prepare_run_conf(
-                self.use_file_service,
-                self.output_module_name,
-                self.common_builtins
-            )
-            process.start()
-            monitor.proc_started(process)
-            self.running_pros.append(process)
-
-        # finish processes
-        for process in self.running_pros[:]:
-            process.subprocess.poll()
-            if None == process.subprocess.returncode:
-                continue
-
-            self.running_pros.remove(process)
-            process.finalize()
-            if process.successful():
-                self.finished_pros.append(process)
-                monitor.proc_finished(process)
-            else:
-                self.failed_pros.append(process)
-                monitor.proc_failed(process)
-
-    def _finalize(self):
-        if settings.recieved_sigint:
-            return
-        if not self.use_file_service:
-            return
-        for process in self.finished_pros:
-            analysis.fs_aliases += list(
-                alias for alias in diskio.generate_fs_aliases(
-                    process.service_filename,
-                    process.sample
-                )
-            )
-
-    def abort_all_processes(self):
-        self.waiting_pros = []
-        for process in self.running_pros:
-            process.terminate()
+        self.finalize()
