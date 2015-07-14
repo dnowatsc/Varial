@@ -4,11 +4,34 @@ Limit derivation with theta: http://theta-framework.org
 
 import os
 import ROOT
+import glob
 
 import varial.tools
 import varial.analysis
+import varial.wrappers
 import theta_auto
 theta_auto.config.theta_dir = os.environ["CMSSW_BASE"] + "/theta"
+
+
+class ThetaLimitWrapper(varial.wrappers.Wrapper):
+    """
+    Wrapper for theta 'plotdata' class.
+    TODO: So far only stores x, y, xerrors and yerrors, check what else needs to be added!
+
+    """
+    def __init__(self, plotdata, **kws):
+        super(ThetaLimitWrapper, self).__init__(**kws)
+        self.x = None
+        self.y = None
+        self.xerrors = None
+        self.yerrors = None
+        self.x = plotdata.x
+        self.y = plotdata.y
+        self.xerrors = plotdata.xerrors
+        self.yerrors = plotdata.yerrors
+
+    def primary_object(self):
+        return self.x
 
 
 class ThetaLimits(varial.tools.Tool):
@@ -68,6 +91,7 @@ class ThetaLimits(varial.tools.Tool):
         if self.filter_keyfunc:
             wrps = filter(self.filter_keyfunc, wrps)
 
+        # print wrps
         dat = filter(self.dat_key, wrps)
         sig = filter(self.sig_key, wrps)
         bkg = filter(self.bkg_key, wrps)
@@ -105,17 +129,20 @@ class ThetaLimits(varial.tools.Tool):
         # shout it out loud
         self.result = varial.wrappers.Wrapper(
             name=self.name,
-            _res_exp=res_exp,  # TODO only TObjects or native python objects (list, dict, int, str ...) allowed
-            _res_obs=res_obs,  # TODO only TObjects or native python objects (list, dict, int, str ...) allowed
+            res_exp_x=res_exp.x,  # TODO only TObjects or native python objects (list, dict, int, str ...) allowed
+            res_exp_y=res_exp.y,
+            res_exp_xerrors=res_exp.xerrors,
+            res_exp_yerrors=res_exp.yerrors,
+            # res_obs=varial.wrappers.ThetaLimitWrapper(res_obs),  # TODO only TObjects or native python objects (list, dict, int, str ...) allowed
         )
-        self.message(
-            'INFO theta result: expected limit:\n' + str(self.result._res_exp))
-        self.message(
-            'INFO theta result: observerd limit:\n' + str(self.result._res_obs))
+        # self.message(
+        #     'INFO theta result: expected limit:\n' + str(self.result.res_exp))
+        # self.message(
+        #     'INFO theta result: observerd limit:\n' + str(self.result.res_obs))
         theta_auto.config.report.write_html(
             os.path.join(self.cwd, 'result'))
 
-class TpTpThetaLimits(ThetaLimits):
+class ThetaLimitsBranchingRatios(ThetaLimits):
     def __init__(self,
         brs = None,
         *args,**kws
@@ -127,34 +154,42 @@ class TpTpThetaLimits(ThetaLimits):
         super(ThetaLimitsBranchingRatios, self).run()
         self.result = varial.wrappers.Wrapper(
             name=self.result.name,
-            _res_exp=self.result._res_exp,
-            _res_obs=self.result._res_obs,
+            res_exp_x=self.result.res_exp_x,  # TODO only TObjects or native python objects (list, dict, int, str ...) allowed
+            res_exp_y=self.result.res_exp_y,
+            res_exp_xerrors=self.result.res_exp_xerrors,
+            res_exp_yerrors=self.result.res_exp_yerrors,
             brs=self.brs
         )
 
 
 class TriangleLimitPlots(varial.tools.Tool):
     def __init__(self,
-        name=None
+        name=None,
+        limit_rel_path=''
     ):
         super(TriangleLimitPlots, self).__init__(name)
+        self.limit_rel_path = limit_rel_path
 
 
     def run(self):
-        parents = os.listdir(self.cwd+'/..')
-        theta_tools = list(k for k in parents if k.startswith("ThetaLimit"))
-        wrps = list(self.lookup_result('../' + k) for k in theta_tools)
+        # parents = os.listdir(self.cwd+'/..')
+        theta_tools = glob.glob(os.path.join(self.cwd+'..', self.limit_rel_path))
+        wrps = list(self.lookup_result(k) for k in theta_tools)
         filename = os.path.join(varial.analysis.cwd, self.name + ".root")
-        f = ROOT.TFile.Open(filename, "RECREATE")
-        f.cd()
-        tri_hist = ROOT.TH2F("triangular_limits", ";br to th;br to tz", 10, 0., 1., 10, 0., 1.)
+        # f = ROOT.TFile.Open(filename, "RECREATE")
+        # f.cd()
+        tri_hist = ROOT.TH2F("triangular_limits", ";br to th;br to tz", 11, -0.05, 1.05, 11, -0.05, 1.05)
         for w in wrps:
             br_th = float(w.brs['th'])
             br_tz = float(w.brs['tz'])
             # limit_f = float(w.res_exp.y[0])
-            tri_hist.Fill(br_th, br_tz, w.res_exp.y[0])
-        tri_hist.Write()
-        f.Close()
+            tri_hist.Fill(br_th, br_tz, w.res_exp_y[0])
+        # tri_hist.Write()
+        self.result = [varial.wrappers.HistoWrapper(tri_hist, legend='twoD_plot')]
+        # f.Close()
+
+
+
 
 
 
