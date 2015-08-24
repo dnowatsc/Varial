@@ -22,7 +22,6 @@ import glob
 import os
 import shutil
 import time
-import subprocess
 
 import analysis
 import diskio
@@ -324,94 +323,143 @@ class SampleNormalizer(Tool):
             name='Lumi factor'
         )
 
+# TODO: in the GITLOGGER_LOG, each tool should get the commit hash from when it was last updated
+# i.e. also if it was amended
 
 class GitTagger(Tool):
     can_reuse = False
 
-
-    def open_file(self, filename):
-        try:
-            with open(filename) as readf:
-                lines = readf.readlines()
-                latest_tag = lines[-1].split()[0]
-                print latest_tag
-                return True
-        except IOError:
-            return False
-
-
-    def find_log(self, filename):
-        
-
-
-    def __init__(self, logfilename='GITTAGGER_LOG.txt'):
+    def __init__(self, logfilename="GITTAGGER_LOG.txt"):
         super(GitTagger, self).__init__()
         self.logfilename = logfilename
-        self.counter = 4
-        self.logfound = False
+        # self.counter = 4
+        # self.logfound = False
+
+    def print_tool_tree(self):
+        toollist = []
+        toollist.append('+' + analysis.results_base.name)
+        for rname in sorted(analysis.results_base.children):
+            self._print_tool_tree(toollist, analysis.results_base.children[rname], 0)
+        return toollist
+
+
+    def _print_tool_tree(self, toollist, res, indent):
+        toollist.append('    ' + '|   '*indent + '+' + res.name)
+        for rname in sorted(res.children):
+            self._print_tool_tree(toollist, res.children[rname], indent + 1)
+
+    def new_commit(self, message=''):
+        commit_msg = raw_input(message)
+        if commit_msg == '':
+            return
+        elif commit_msg == 'app':
+            previous_commit_msg = subprocess.check_output('git log -1 --pretty=%B', shell=True)
+            os.system('git commit --amend -am "{0}"'.format(previous_commit_msg)) # 
+        else:
+            os.system('git commit -am "From GitTagger: {0}"'.format(commit_msg))
 
 
     def run(self):
+        toollist = self.print_tool_tree()
+        files_changed = False
         if os.system('git diff --quiet') or os.system('git diff --cached --quiet'):
-            os.system('git status')
-            commit_msg = raw_input('Please give commit message (empty := amend commit, -a <Msg>:= amend commit with new message <Msg>, -no := no commit): ')
-            if commit_msg == '':
-                previous_commit_msg = subprocess.check_output('git log -1 --pretty=%B', shell=True)
-                previous_commit_msg = previous_commit_msg.replace('\n', '')
-                with open(self.logfilename) as readf:
-                    lines = readf.readlines()
-                    latest_tag = lines[-1].split()[0]
-                with open(self.logfilename, "w") as writef:
-                    writef.writelines([item for item in lines[:-1]])
-                    writef.write(time.strftime(latest_tag + " %Y%m%dT%H%M%S ",time.localtime()) + previous_commit_msg + '\n')
-                os.system('git commit -a --amend -m "{0}"'.format(previous_commit_msg))
-                os.system('git tag -af "plot_v{0}" -m "Automatically created tag version {0}"'.format(latest_tag))
+            files_changed = True
+        if os.path.isfile(analysis.cwd+self.logfilename):
+            new_tool = False
+            with open(analysis.cwd+self.logfilename, 'r') as logfile:
+                lines = logfile.readlines()
+                for index, iTool in enumerate(toollist):
+                    if iTool != lines[index][:-44]:
+                        new_tool = True
+                        break
+            if new_tool:
+                with open(analysis.cwd+self.logfilename, 'w') as logfile:
+                    logfile.writelines(toollist)
+                self.new_commit("New tool found, if you want to make new commit type a commit message; "\
+                      "If you want to amend the latest commit, type 'app'; "\
+                      "If you don't want to commit, just press enter: ")
 
-            elif commit_msg.startswith('new_tag '):
-                with open(self.logfilename, 'a+') as logf:
-                    new_tag = commit_msg.split()[1]
-                    if len(new_tag.split('.')) != 2 or not new_tag.split('.')[0].isdigit() or not new_tag.split('.')[1].isdigit():
-                        raise NameError('ERROR: invalid tag')
-                        return
-                    commit_msg = ' '.join(commit_msg.split()[2:])
-                    settings.git_tag = new_tag
-                    logf.write(time.strftime(new_tag + " %Y%m%dT%H%M%S ",time.localtime()) + commit_msg + '\n')
-                    os.system('git commit -am "From GitTagger: {0}"'.format(commit_msg))
-                    os.system('git tag -af "plot_v{0}" -m "Automatically created tag version {0}"'.format(new_tag))
+            else:
+                commit_msg = raw_input("No new Tool found, want to amend commit? "\
+                    "(For no new commit message just press Enter otherwise type new commit message) ")
+                if any((commit_msg == i) for i in ['n', 'N', 'no', 'No', 'NO']):
+                    print "No commit"
+                    return
+                elif commit_msg == '':
+                    previous_commit_msg = subprocess.check_output('git log -1 --pretty=%B', shell=True)
+                    os.system('git commit --amend -am "{0}"'.format(previous_commit_msg))
+                else:
+                    os.system('git commit -a --amend -m "From GitTagger: {0}"'.format(commit_msg))
+                # print "Logfile content: ", lines
+        else:
+            self.new_commit("No logfile found, if you want to make new commit type a commit message; "\
+                      "If you want to amend the latest commit, type 'app'; "\
+                      "If you don't want to commit, just press enter: ")
+            with open(analysis.cwd+self.logfilename, 'w') as logfile:
+                logfile.writelines((i + ' : ' + \
+                    subprocess.check_output('git rev-parse --verify HEAD', shell=True))\
+                    for i in toollist)
 
-            elif commit_msg.startswith('-a'):
-                with open(self.logfilename) as readf:
-                    lines = readf.readlines()
-                    latest_tag = lines[-1].split()[0]
-                with open(self.logfilename, "w") as writef:
-                    writef.writelines([item for item in lines[:-1]])
-                    writef.write(time.strftime(latest_tag + " %Y%m%dT%H%M%S ",time.localtime()) + commit_msg[3:] + '\n')
-                os.system('git commit -a --amend -m "From GitTagger: {0}"'.format(commit_msg[3:]))
 
-            elif commit_msg == "-no":
-                pass
+            # os.system(' git status')
+            # commit_msg = raw_input('Please give commit message (empty := amend commit, -a <Msg>:= amend commit with new message <Msg>, -no := no commit): ')
+            # if commit_msg == '':
+            #     previous_commit_msg = subprocess.check_output('git log -1 --pretty=%B', shell=True)
+            #     previous_commit_msg = previous_commit_msg.replace('\n', '')
+            #     with open(self.logfilename) as readf:
+            #         lines = readf.readlines()
+            #         latest_tag = lines[-1].split()[0]
+            #     with open(self.logfilename, "w") as writef:
+            #         writef.writelines([item for item in lines[:-1]])
+            #         writef.write(time.strftime(latest_tag + " %Y%m%dT%H%M%S ",time.localtime()) + previous_commit_msg + '\n')
+            #     os.system('git commit -a --amend -m "{0}"'.format(previous_commit_msg))
+            #     os.system('git tag -af "plot_v{0}" -m "Automatically created tag version {0}"'.format(latest_tag))
 
-            elif commit_msg:
-                with open(self.logfilename, 'a+') as logf:
-                    try:
-                        lastline = logf.readlines()[-1]
-                        latest_tag = lastline.split()[0]
-                        version_split = latest_tag.split('.')
-                        if len(version_split) != 2:
-                            raise NameError('Invalid tag in {0}!'.format(logfilename))
-                            return
-                        new_subtag = int(version_split[-1])+1
-                        new_tag = version_split[0]+'.'+str(new_subtag)
-                    except IndexError:
-                        print 'Index Error! Set tag to 1.0'
-                        new_tag = '1.0'
-                    except ValueError:
-                        raise NameError('Invalid version tag in {0}!'.format(logfilename))
-                        return
-                    settings.git_tag = new_tag
-                    logf.write(time.strftime(new_tag + " %Y%m%dT%H%M%S ",time.localtime()) + commit_msg + '\n')
-                    os.system('git commit -am "From GitTagger: {0}"'.format(commit_msg))
-                    os.system('git tag -af "plot_v{0}" -m "Automatically created tag version {0}"'.format(new_tag))
+            # elif commit_msg.startswith('new_tag '):
+            #     with open(self.logfilename, 'a+') as logf:
+            #         new_tag = commit_msg.split()[1]
+            #         if len(new_tag.split('.')) != 2 or not new_tag.split('.')[0].isdigit() or not new_tag.split('.')[1].isdigit():
+            #             raise NameError('ERROR: invalid tag')
+            #             return
+            #         commit_msg = ' '.join(commit_msg.split()[2:])
+            #         settings.git_tag = new_tag
+            #         logf.write(time.strftime(new_tag + " %Y%m%dT%H%M%S ",time.localtime()) + commit_msg + '\n')
+            #         os.system('git commit -am "From GitTagger: {0}"'.format(commit_msg))
+            #         os.system('git tag -af "plot_v{0}" -m "Automatically created tag version {0}"'.format(new_tag))
+
+            # elif commit_msg.startswith('-a'):
+            #     with open(self.logfilename) as readf:
+            #         lines = readf.readlines()
+            #         latest_tag = lines[-1].split()[0]
+            #     with open(self.logfilename, "w") as writef:
+            #         writef.writelines([item for item in lines[:-1]])
+            #         writef.write(time.strftime(latest_tag + " %Y%m%dT%H%M%S ",time.localtime()) + commit_msg[3:] + '\n')
+            #     os.system('git commit -a --amend -m "From GitTagger: {0}"'.format(commit_msg[3:]))
+
+            # elif commit_msg == "-no":
+            #     pass
+
+            # elif commit_msg:
+            #     with open(self.logfilename, 'a+') as logf:
+            #         try:
+            #             lastline = logf.readlines()[-1]
+            #             latest_tag = lastline.split()[0]
+            #             version_split = latest_tag.split('.')
+            #             if len(version_split) != 2:
+            #                 raise NameError('Invalid tag in {0}!'.format(logfilename))
+            #                 return
+            #             new_subtag = int(version_split[-1])+1
+            #             new_tag = version_split[0]+'.'+str(new_subtag)
+            #         except IndexError:
+            #             print 'Index Error! Set tag to 1.0'
+            #             new_tag = '1.0'
+            #         except ValueError:
+            #             raise NameError('Invalid version tag in {0}!'.format(logfilename))
+            #             return
+            #         settings.git_tag = new_tag
+            #         logf.write(time.strftime(new_tag + " %Y%m%dT%H%M%S ",time.localtime()) + commit_msg + '\n')
+            #         os.system('git commit -am "From GitTagger: {0}"'.format(commit_msg))
+            #         os.system('git tag -af "plot_v{0}" -m "Automatically created tag version {0}"'.format(new_tag))
 
     # def check_version(self, filename, index=-1):
     #     filename.seek(0,0)
