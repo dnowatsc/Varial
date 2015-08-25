@@ -322,6 +322,7 @@ class RootFilePlotter(toolinterface.ToolChainParallel):
                  flat=False,
                  name=None,
                  filter_keyfunc=None,
+                 auto_legend=True,
                  legendnames=None):
         super(RootFilePlotter, self).__init__(name)
 
@@ -340,7 +341,10 @@ class RootFilePlotter(toolinterface.ToolChainParallel):
             plotter_factory = Plotter
 
         self._setup_aliases(pattern, filter_keyfunc)
-        gen_apply_legend = self._setup_gen_legend(pattern, legendnames)
+        if auto_legend:
+            gen_apply_legend = self._setup_gen_legend(pattern, legendnames)
+        else:
+            gen_apply_legend = lambda wrps: wrps
 
         # either print all in one dir...
         if flat:
