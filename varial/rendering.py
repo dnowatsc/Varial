@@ -51,6 +51,10 @@ class HistoRenderer(Renderer, wrappers.HistoWrapper):
         super(HistoRenderer, self).__init__(wrp)
 
         if self.histo_sys_err:                          # calculate total error
+            # tot_fill_col = getattr(wrp, 'tot_fill_col', None)
+            # tot_fill_style = getattr(wrp, 'tot_fill_style', None)
+            kws = dict(wrp.__dict__)
+            kws.pop('histo', None)
             nom, sys, tot = self.histo, self.histo_sys_err, self.histo.Clone()
             for i in xrange(tot.GetNbinsX()+2):
                 nom_val = nom.GetBinContent(i)
@@ -66,7 +70,7 @@ class HistoRenderer(Renderer, wrappers.HistoWrapper):
 
             self.histo_tot_err = tot
             settings.sys_error_style(self.histo_sys_err)
-            settings.tot_error_style(self.histo_tot_err)
+            settings.tot_error_style(self.histo_tot_err, **kws)
 
         if getattr(wrp, 'draw_option', 0):
             self.draw_option = wrp.draw_option
@@ -113,12 +117,14 @@ class HistoRenderer(Renderer, wrappers.HistoWrapper):
         obj = getattr(self, 'graph_draw', self.histo)
         obj.Draw(self.draw_option + option)
 
+import pprint
 
 class StackRenderer(HistoRenderer, wrappers.StackWrapper):
     """
     Extend StackWrapper for drawing.
     """
     def __init__(self, wrp):
+        # pprint.pprint(wrp.__dict__)
         super(StackRenderer, self).__init__(wrp)
         settings.stat_error_style(self.histo)
         self.draw_option = getattr(wrp, 'draw_option', 'hist')
@@ -136,8 +142,8 @@ class StackRenderer(HistoRenderer, wrappers.StackWrapper):
             return super(StackRenderer, self).y_max()
 
     def draw(self, option=''):
-        for h in self.stack.GetHists():
-            h.SetLineColor(ROOT.kGray)
+        # for h in self.stack.GetHists():
+        #     h.SetLineColor(ROOT.kGray)
         self.stack.Draw(self.draw_option + option)
         self.stack.GetXaxis().SetTitle(self.histo.GetXaxis().GetTitle())
         self.stack.GetYaxis().SetTitle(self.histo.GetYaxis().GetTitle())
@@ -237,6 +243,8 @@ def setup(wrps, kws):
 
     # collect info
     info = rnds[0].all_info()  # TODO only common info
+    # for r in rnds[1:]:
+    #     info.update(r.all_info())
     for attr in ('is_signal', 'is_data', 'is_pseudo_data'):
         if attr in info:
             del info[attr]
@@ -253,6 +261,7 @@ def setup(wrps, kws):
         'y_bounds'    : None,
         'y_min_gr_0'  : 1e-23,
         'history'     : _track_canvas_history(rnds, kws),
+        'has_data'    : any(r.is_data for r in rnds),
         '_renderers'  : rnds,
     })
     wrp = wrappers.CanvasWrapper(canvas, **info)
@@ -316,7 +325,7 @@ def mk_tobject_draw_func(tobject):
     ``    ROOT.TLatex(0.5, 0.5, 'My Box')``
     ``)``
     """
-    assert isinstance(text, ROOT.TObject), '"tobject" arg must be a TObject'
+    assert isinstance(tobject, ROOT.TObject), '"tobject" arg must be a TObject'
 
     def tobject_draw_func(wrp, _):
         tobject.Draw()
@@ -419,6 +428,8 @@ def mk_legend_func(**outer_kws):
         par = dict(settings.defaults_Legend)
         par.update(outer_kws)
         par.update(kws)
+        if hasattr(wrp, 'legend_settings'):
+            par.update(wrp.legend_settings)
 
         # get legend entry objects
         tmp_leg = wrp.main_pad.BuildLegend(0.1, 0.6, 0.5, 0.8)
@@ -468,7 +479,7 @@ def _bottom_plot_make_pad(wrp):
     wrp.second_pad = ROOT.TPad(
         'bottom_pad_' + name,
         'bottom_pad_' + name,
-        0, 0, 1, 0.25
+        0, 0, 1, settings.bottom_pad_height
     )
     settings.apply_split_pad_styles(wrp)
     wrp.canvas.cd()

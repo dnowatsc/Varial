@@ -169,6 +169,11 @@ class Tool(_ToolBase):
             f.write(self.time_fin)
         super(Tool, self).finished()
 
+    @staticmethod
+    def lookup_filename(path, raise_on_empty_path=True):
+        return analysis.lookup_filename(path, raise_on_empty_path)     
+
+
 
 class ToolChain(_ToolBase):
     """Executes PostProcTools."""

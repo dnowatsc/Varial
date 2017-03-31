@@ -18,6 +18,8 @@ import ctypes
 import array
 import ROOT
 import math
+import monitor
+import pprint
 
 
 class OperationError(RuntimeError): pass
@@ -112,6 +114,7 @@ def stack(wrps):
         if wrp.legend:
             wrp.histo.SetTitle(wrp.legend)
         stk_wrp.Add(wrp.histo)
+        info.update(wrp.all_info())
     if not info:
         raise TooFewWrpsError(
             "At least one Wrapper must be provided."
@@ -1034,7 +1037,7 @@ def th2_projection_y(wrp, name='_p', firstbin=0, lastbin=-1, option='eo'):
 
 
 @history.track_history
-def squash_sys_sq(wrps):
+def squash_sys_sq(wrps, add_sys_errs=False):
     """
     Calculates systematic uncertainty with sum of squares.
     :param wrps:    iterable of histowrappers, where the
@@ -1069,6 +1072,7 @@ def squash_sys_sq(wrps):
     sum_of_sq_errs_down = None
     min_errs = None
     info = None
+    errors = {}
 
     def get_err_hist(h, err_factor):
         w_err = h.Clone()
@@ -1107,11 +1111,20 @@ def squash_sys_sq(wrps):
                 min_errs.SetBinContent(i, 1e-10)  # make non-zero
 
         else:                                                   # collect
+            if not w or (not (isinstance(w, wrappers.HistoWrapper) and 'TH1' in w.type)):
+                continue
             n_sys_hists += 1
+            err_up = get_err_hist(w.histo, +1).Integral() - nominal.Integral()
+            err_down = get_err_hist(w.histo, -1).Integral() - nominal.Integral()
+            sys = w.sys_info.split('__')[0]
+            errors.update({sys+'__err' : (err_up, err_down)})
             sum_of_sq_errs_up.Add(add_del_sq(w.histo, +1))
             sum_of_sq_errs_down.Add(add_del_sq(w.histo, -1))
 
-    assert n_sys_hists, 'At least one systematic histogram needed.'
+    # assert n_sys_hists, 'At least one systematic histogram needed.'
+
+    if not n_sys_hists:
+        return wrappers.HistoWrapper(nominal, **info)
 
     get_sqr_hist(sum_of_sq_errs_up)
     get_sqr_hist(sum_of_sq_errs_down)
@@ -1128,6 +1141,8 @@ def squash_sys_sq(wrps):
             - sum_of_sq_errs_down.GetBinContent(i))/2.)
 
     info['histo_sys_err'] = sys_hist
+    if add_sys_errs:
+        info.update(errors)
     return wrappers.HistoWrapper(nominal, **info)
 
 
@@ -1287,8 +1302,8 @@ def get_sys_int(wrp, use_bin_width=False):
     down_uncert = sys_down.Integral(option) - nom_hist.Integral(option)
 
     if up_uncert < 0 or down_uncert > 0:
-        raise WrongIntegralError(
-            "Uncertainty integrals with wrong sign: %s %s" % (up_uncert, down_uncert)
+        monitor.message('operations.get_sys_int',
+            "WARNING Uncertainty for histo %s (sample %s) integrals with wrong sign: %s %s" % (wrp.in_file_path, wrp.sample, up_uncert, down_uncert)
         )
 
     return up_uncert, down_uncert

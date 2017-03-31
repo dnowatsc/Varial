@@ -112,6 +112,8 @@ class HistoLoader(Tool):
                  hook_loaded_histos=None,
                  raise_on_empty_result=True,
                  io=pklio,
+                 lookup_aliases='aliases.in.*',
+                 quiet_mode=False,
                  name=None):
         super(HistoLoader, self).__init__(name)
         if pattern and input_result_path:
@@ -123,10 +125,12 @@ class HistoLoader(Tool):
         self.hook_loaded_histos = hook_loaded_histos
         self.raise_on_empty_result = raise_on_empty_result
         self.io = io
+        self.lookup_aliases = lookup_aliases
+        self.quiet_mode = quiet_mode
 
     def run(self):
         if self.pattern:
-            wrps = gen.dir_content(self.pattern)
+            wrps = gen.dir_content(self.pattern, self.lookup_aliases, quiet_mode=self.quiet_mode)
             wrps = itertools.ifilter(self.filter_keyfunc, wrps)
             wrps = gen.load(wrps)
         elif self.input_result_path:
@@ -137,7 +141,7 @@ class HistoLoader(Tool):
             wrps = itertools.ifilter(self.filter_keyfunc, wrps)
         else:
             wrps = gen.fs_filter_active_sort_load(self.filter_keyfunc)
-
+        
         if self.hook_loaded_histos:
             wrps = self.hook_loaded_histos(wrps)
         self.result = list(wrps)
@@ -145,7 +149,7 @@ class HistoLoader(Tool):
         if not self.result:
             if self.raise_on_empty_result:
                 raise RuntimeError('ERROR No histograms found.')
-            else:
+            elif not self.quiet_mode:
                 self.message('ERROR No histograms found.')
 
 
@@ -168,12 +172,14 @@ class CopyTool(Tool):
                          'webcreate_*',),
                  wipe_dest_dir=True,
                  name=None,
+                 options='-qavz --delete',
                  use_rsync=False):
         super(CopyTool, self).__init__(name)
         self.dest = dest.replace('~', os.getenv('HOME'))
         self.src = src.replace('~', os.getenv('HOME'))
         self.ignore = ignore
         self.wipe_dest_dir = wipe_dest_dir
+        self.options = options
         self.use_rsync = use_rsync
 
     def def_copy(self, src_objs, dest, ignore):
@@ -195,7 +201,7 @@ class CopyTool(Tool):
             self.wipe_dest_dir = False
             self.ignore = list('--exclude='+w for w in self.ignore)
             cp_func = lambda w, x, y: os.system(
-                'rsync -qavz --delete {0} {1} {2}'.format(
+                'rsync {0} {1} {2} {3}'.format(self.options,
                     ' '.join(w), x, ' '.join(y)))
             dest = self.dest
         else:

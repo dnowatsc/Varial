@@ -4,6 +4,7 @@ Tools connected to the use of (La)Tex.
 
 import shutil
 import os
+import time
 
 from varial.toolinterface import Tool
 
@@ -32,6 +33,8 @@ class TexContent(Tool):
                  include_str='%s',
                  dest_dir=None,
                  dest_dir_name=None,
+                 do_hash=True,
+                 time_hash=False,
                  name=None):
         super(TexContent, self).__init__(name)
         self.images = images
@@ -39,14 +42,21 @@ class TexContent(Tool):
         self.include_str = include_str
         self.dest_dir = dest_dir
         self.dest_dir_name = dest_dir_name
+        self.do_hash = do_hash
+        self.time_hash = time_hash
 
     def _join(self, *args):
         return os.path.join(self.dest_dir, *args)
 
-    @staticmethod
-    def _hashified_filename(path):
+    # @staticmethod
+    def _hashified_filename(self, path):
         bname, _ = os.path.splitext(os.path.basename(path))
-        hash_str = '_' + hex(hash(os.path.dirname(path)))[-7:]
+        if self.time_hash:
+            hash_str = '_' + time.strftime('%m%d%H')
+        elif self.do_hash:
+            hash_str = '_' + hex(hash(os.path.dirname(path)))[-7:]
+        else:
+            hash_str = ''
         return bname + hash_str
 
     def initialize(self):
@@ -58,6 +68,11 @@ class TexContent(Tool):
 
     def copy_image_files(self):
         for blockname, blockfiles in self.images.iteritems():
+            if not all(self.lookup_filename(b, raise_on_empty_path=False) for b in blockfiles):
+                missing_files = list(b for b in blockfiles if not self.lookup_filename(b, raise_on_empty_path=False))
+                self.message('WARNING the following files in %s do not exist: %s' % (blockname, str(missing_files)))
+                continue
+
             hashified_and_path = list(
                 (self._hashified_filename(bf), bf) for bf in blockfiles
             )
@@ -77,7 +92,7 @@ class TexContent(Tool):
                             'Only .eps, .pdf and .png images are supported.')
 
                     # copy image file
-                    img_dest = blockname + '_' + hashified.replace('.', '-')
+                    img_dest = blockname + '_' + hashified.replace('.', '-').replace('[', '').replace(']', '')
                     shutil.copy(p+ext, self._join(img_dest+ext))
 
                     # write tex include
@@ -86,6 +101,9 @@ class TexContent(Tool):
 
     def copy_plain_files(self):
         for fname, path, in self.tex_files.iteritems():
+            if not os.path.exists(path):
+                self.message('WARNING file %s does not exist' % path)
+                continue
             shutil.copy(path, self._join(fname))
 
     def run(self):

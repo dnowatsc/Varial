@@ -8,10 +8,11 @@ import varial
 import os
 
 
-spark_context = None
+# spark_context = None
 
 
 def add_histos(a, b):
+    # print 'ADDING ', a.GetName(), b.GetName()
     c = a.Clone()
     c.Add(b)
     return c
@@ -20,6 +21,7 @@ def add_histos(a, b):
 def open_files(args):
     import ROOT
     sample, filename = args
+    print 'OPENING ', sample, filename
     return sample, filename, ROOT.TFile(os.path.abspath(filename))
 
 
@@ -61,15 +63,22 @@ class SparkTreeProjector(TreeProjectorBase):
     :param hot_result:  if True, result wrappers are stored in hot_result member and not to disk.
     """
     def __init__(self, *args, **kws):
-        global spark_context
-        spark_context = pyspark.SparkContext(
-            kws.pop('spark_url', 'local'),
-            'SparkTreeProjector/%s' % os.getlogin()
-        )
+        # global spark_context
+        self.spark_url = kws.pop('spark_url', 'local')
+        # if not spark_context:
+        #     spark_context = pyspark.SparkContext(
+        #         spark_url,
+        #         'SparkTreeProjector/%s' % os.getlogin()
+        #     )
         self.rdd_cache = None
         super(SparkTreeProjector, self).__init__(*args, **kws)
 
     def run(self):
+        # if not spark_context:
+        spark_context = pyspark.SparkContext(
+            self.spark_url,
+            'SparkTreeProjector/%s' % os.getlogin()
+        )
         os.system('touch ' + self.cwd + 'webcreate_denial')
         self.hot_result = []
 
@@ -80,6 +89,7 @@ class SparkTreeProjector(TreeProjectorBase):
                 for sample, filenames in self.filenames.iteritems()
                 for f in filenames
             )
+            print 'LENGTH INPUT FILES: ', len(inputs)
             rdd = spark_context.parallelize(inputs)
             rdd.cache()
             rdd = rdd.map(open_files)
@@ -109,3 +119,5 @@ class SparkTreeProjector(TreeProjectorBase):
 
         if not self.use_hot_result:
             self.put_aliases(lambda w: os.path.basename(w.file_path).split('.')[-2])
+
+        spark_context.stop()

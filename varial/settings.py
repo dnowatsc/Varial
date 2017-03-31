@@ -57,6 +57,8 @@ def can_go_parallel():
 canvas_size_x = 550
 canvas_size_y = 400
 
+bottom_pad_height = 0.25
+
 box_text_size = 0.05
 defaults_Legend = {
     'x_pos': 0.81,  # left edge
@@ -86,14 +88,20 @@ pretty_names = {}
 stacking_order = []
 canvas_post_build_funcs = []
 stack_line_color = [1]
+signal_linewidth = 2
 
-stat_error_color = 921
-stat_error_fill = 3013
-sys_error_color = 923
-sys_error_fill = 3002
-tot_error_color = 922
-tot_error_fill = 3013
+defaults_err_hist = {
+    'marker_color' : 1,
+    'marker_size' : 0,
+    'line_color' : 1,
+}
 
+stat_error_color = 921,
+stat_error_fill = 3013,
+sys_error_color = 923,
+sys_error_fill = 3002,
+tot_error_color = 922,
+tot_error_fill = 3013,
 
 ################################################################ root style ###
 from array import array
@@ -108,23 +116,24 @@ def apply_axis_style(obj, y_bounds):
     obj.SetMaximum(y_max * 1.1)
 
 
-def apply_error_hist_style(h, col, fill):
-    if isinstance(col, tuple):
-        col, opac = col
-        h.SetFillColorAlpha(col, opac)
-    elif isinstance(col, int):
-        h.SetFillColor(col)
-    h.SetMarkerColor(1)
-    h.SetMarkerSize(0)
-    h.SetFillStyle(fill)
-    h.SetLineColor(1)
+def apply_error_hist_style(h, **kws):
+    f_col = kws.get('fill_color', 921)
+    if isinstance(f_col, tuple):
+        f_col, opac = f_col
+        h.SetFillColorAlpha(f_col, opac)
+    elif isinstance(f_col, int):
+        h.SetFillColor(f_col)
+    h.SetMarkerColor(kws.get('marker_color', 1))
+    h.SetMarkerSize(kws.get('marker_size', 0))
+    h.SetFillStyle(kws.get('fill_style', 3013))
+    h.SetLineColor(kws.get('line_color', 1))
 
 
 def apply_split_pad_styles(cnv_wrp):
     main, scnd = cnv_wrp.main_pad, cnv_wrp.second_pad
 
-    main.SetTopMargin(0.135)
-    main.SetBottomMargin(0.25)
+    main.SetTopMargin(0.125)
+    main.SetBottomMargin(bottom_pad_height)
     #main.SetRightMargin(0.04)
     #main.SetLeftMargin(0.16)
 
@@ -139,24 +148,30 @@ def apply_split_pad_styles(cnv_wrp):
     first_obj = cnv_wrp.first_obj
     first_obj.GetYaxis().CenterTitle(1)
     first_obj.GetYaxis().SetTitleSize(0.055)
-    first_obj.GetYaxis().SetTitleOffset(1.3)
+    first_obj.GetYaxis().SetTitleOffset(1.1)
     first_obj.GetYaxis().SetLabelSize(0.055)
     first_obj.GetXaxis().SetNdivisions(505)
 
 
-def stat_error_style(histo):
-    histo.SetTitle('stat. uncert. MC')
-    apply_error_hist_style(histo, stat_error_color, stat_error_fill)
+def stat_error_style(histo, **kws):
+    fill_color, fill_style = kws.get('stat_fill_color', stat_error_color), kws.get('stat_fill_style', stat_error_fill)
+    kws.update({ 'fill_color' : fill_color, 'fill_style' : fill_style})
+    histo.SetTitle(kws.get('stat_err_legend', 'stat. uncert. MC'))
+    apply_error_hist_style(histo, **kws)
 
 
-def sys_error_style(histo):
-    histo.SetTitle('sys. uncert. MC')
-    apply_error_hist_style(histo, sys_error_color, sys_error_fill)
+def sys_error_style(histo, **kws):
+    fill_color, fill_style = kws.get('sys_fill_color', sys_error_color), kws.get('sys_fill_style', sys_error_fill)
+    kws.update({ 'fill_color' : fill_color, 'fill_style' : fill_style})
+    histo.SetTitle(kws.get('sys_err_legend', 'sys. uncert. MC'))
+    apply_error_hist_style(histo, **kws)
 
 
-def tot_error_style(histo):
-    histo.SetTitle('tot. uncert. MC')
-    apply_error_hist_style(histo, tot_error_color, tot_error_fill)
+def tot_error_style(histo, **kws):
+    fill_color, fill_style = kws.get('tot_fill_color', tot_error_color), kws.get('tot_fill_style', tot_error_fill)
+    kws.update({ 'fill_color' : fill_color, 'fill_style' : fill_style})
+    histo.SetTitle(kws.get('tot_err_legend', 'tot. uncert. MC'))
+    apply_error_hist_style(histo, **kws)
 
 
 def set_bottom_plot_general_style(obj):

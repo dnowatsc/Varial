@@ -24,6 +24,22 @@ _infofile = '_varial_infodata.pkl'
 use_analysis_cwd = True
 
 
+def mod_log_def(wrp):
+    # if the cnv.first_obj has a member called 'GetMaximum', the
+    # maximum should be greater than zero...
+    if (hasattr(wrp, 'first_obj') and (not hasattr(wrp.first_obj, 'GetMaximum')
+        or wrp.first_obj.GetMaximum() > 1e-9)
+    ):
+        min_val = wrp.y_min_gr_0 * 0.5
+        min_val = max(min_val, 1e-9)
+        wrp.first_obj.SetMinimum(min_val)
+        if 'TH2' in wrp._renderers[0].type:
+            wrp.main_pad.SetLogz(1)
+        else:
+            wrp.main_pad.SetLogy(1)
+    return wrp
+
+
 def bulk_read_info_dict(dir_path=None):
     """Returns dict of info-dicts (not wrapper instances)"""
     if use_analysis_cwd:
@@ -40,9 +56,17 @@ def bulk_read_info_dict(dir_path=None):
     return res
 
 
-def bulk_write(wrps, name_func, dir_path='', suffices=None, linlog=False):
+def bulk_write(wrps, name_func, dir_path='', suffices=None, linlog=False, mod_log=None):
     """Writes wrps en block."""
 
+    def save_file(w, img_path):
+        # write with suffices
+        for suffix in suffices:
+            if suffix == '.root':
+                continue
+            w.obj.SaveAs(img_path+suffix)
+
+    f_mod_log = mod_log or mod_log_def
     # prepare
     if use_analysis_cwd:
         dir_path = os.path.join(analysis.cwd, dir_path)
@@ -81,42 +105,43 @@ def bulk_write(wrps, name_func, dir_path='', suffices=None, linlog=False):
         dirfile.Close()
     f_root.Close()
 
-    # write with suffices
-    for suffix in suffices:
-        if suffix == '.root':
-            continue
 
-        for name, w in wrps_dict.iteritems():
+    for name, w in wrps_dict.iteritems():
 
-            # root will not store filenames with '[]' correctly. fix:
-            alt_name = name.replace('[', '(').replace(']', ')')
-            img_path = os.path.join(dir_path, alt_name)
-            good_path = os.path.join(dir_path, name)
+        # root will not store filenames with '[]' correctly. fix:
+        alt_name = name.replace('[', '(').replace(']', ')')
+        img_path = os.path.join(dir_path, alt_name)
+        good_path = os.path.join(dir_path, name)
 
-            if linlog:
-                w.main_pad.SetLogy(0)
-                w.obj.SaveAs(img_path+'_lin'+suffix)
+        if linlog:
+            w.main_pad.SetLogy(0)
+            save_file(w, img_path+'_lin')            
+            # w.obj.SaveAs(img_path+'_lin'+suffix)
 
-                # if the cnv.first_obj has a member called 'GetMaximum', the
-                # maximum should be greater than zero...
-                if (hasattr(w, 'first_obj')
-                    and (not hasattr(w.first_obj, 'GetMaximum')
-                         or w.first_obj.GetMaximum() > 1e-9)
-                ):
-                    min_val = w.y_min_gr_0 * 0.5
-                    min_val = max(min_val, 1e-9)
-                    w.first_obj.SetMinimum(min_val)
-                    w.main_pad.SetLogy(1)
+            w = f_mod_log(w)
 
-                w.obj.SaveAs(img_path+'_log'+suffix)
-                w.main_pad.SetLogy(0)  # reset to lin
+            save_file(w, img_path+'_log')
+            # w.obj.SaveAs(img_path+'_log'+suffix)
+            # if w._renderers[0].type.startswith('TH2'):
+            #     w.main_pad.SetLogz(0)  # reset to lin
+            # else:
+            #     w.main_pad.SetLogy(0)  # reset to lin
 
-                if alt_name != name:
-                    os.rename(img_path+'_lin'+suffix, good_path+'_lin'+suffix)
-                    os.rename(img_path+'_log'+suffix, good_path+'_log'+suffix)
-            else:
-                w.obj.SaveAs(img_path+suffix)
-                if alt_name != name:
-                    os.rename(img_path+suffix, good_path+suffix)
+            if alt_name != name:
+                for suffix in suffices:
+                    try:
+                        os.rename(img_path+'_lin'+suffix, good_path+'_lin'+suffix)
+                        os.rename(img_path+'_log'+suffix, good_path+'_log'+suffix)
+                    except OSError:
+                        pass
+        else:
+            save_file(w, img_path)            
+            # w.obj.SaveAs(img_path+suffix)
+            if alt_name != name:
+                for suffix in suffices:
+                    try:
+                        os.rename(img_path+suffix, good_path+suffix)
+                    except OSError:
+                        pass
 
     return wrps_dict.values()

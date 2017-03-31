@@ -91,6 +91,7 @@ class Hadd(varial.tools.Tool):
             else:
                 other_inputs.append(file_path)
 
+
         # apply hadd in parallel
         n_procs = min(varial.settings.max_num_processes, len(basename_map))
         iterable = ((varial.analysis.get_current_tool_path(), bn, fs)

@@ -16,7 +16,7 @@ def integral_and_error(th_hist):
             0, th_hist.GetNbinsX(), 0, th_hist.GetNbinsY(), err)
     else:
         val = th_hist.IntegralAndError(0, th_hist.GetNbinsX(), err)
-    return round(val, 1), round(err.value, 1)
+    return val, err.value
 
 
 def integral_and_corr_error(th_hist):
@@ -27,7 +27,7 @@ def integral_and_corr_error(th_hist):
             th_hist.GetBin(
                 th_hist.GetNbinsX(), th_hist.GetNbinsY(), th_hist.GetNbinsZ()))
     )
-    return round(ntgrl, 1), round(err_sum, 1)
+    return ntgrl, err_sum
 
 
 def random_hex_str():

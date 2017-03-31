@@ -442,7 +442,7 @@ def gen_make_th2_projections(wrps, keep_th2=True):
         yield y_buf.pop(0)
 
 
-def gen_squash_sys(wrps):
+def gen_squash_sys(wrps, add_sys_errs=False):
     """
     Adds one-sided sys' quadratically and builds envelope from up and down.
     """
@@ -456,12 +456,16 @@ def gen_squash_sys(wrps):
 
     # sort for plus and minus and get lists
     wrps = sorted(wrps, key=sys_info_key)
+    # for w in wrps: print w.in_file_path, w.sample, w.sys_info_key
     wrps = group(wrps, sys_info_key)
     wrps = list(list(ws) for ws in wrps)  # [[nom], [A__plus, A__minus], [B__plus, B__minus], ...]
+    for ws in wrps[1:]:
+        if len(ws) != 2:
+            wrps.remove(ws)
     nominal, nominal_list = wrps[0][0], wrps[0]
     try:
         uncertainties = list(op.squash_sys_env(ws) for ws in wrps[1:]) #  [A, B, ...]
-        sys_uncert = op.squash_sys_sq(nominal_list + uncertainties)
+        sys_uncert = op.squash_sys_sq(nominal_list + uncertainties, add_sys_errs)
     except op.OperationError as e:
         monitor.message('generators.gen_squash_sys',
                         'WARNING catching error: \n' + str(e))
@@ -469,10 +473,12 @@ def gen_squash_sys(wrps):
 
     # put sys on nominal wrp (if nominal is a stack, the stack must be kept)
     nominal.histo_sys_err = sys_uncert.histo_sys_err
+    if add_sys_errs:
+        nominal.__dict__.update(dict((sys, errs) for sys, errs in sys_uncert.__dict__.iteritems() if sys.endswith('__err')))
     return nominal
 
 
-def gen_squash_sys_acc(wrps, accumulator, calc_sys_integral=False):
+def gen_squash_sys_acc(wrps, accumulator, calc_sys_integral=False, add_sys_errs=False):
     """
     Adds one-sided sys' quadratically and builds envelope from up and down.
     """
@@ -499,7 +505,7 @@ def gen_squash_sys_acc(wrps, accumulator, calc_sys_integral=False):
     wrps = sorted(wrps, key=sys_info_key)
     wrps = group(wrps, sys_info_key)
     wrps = (accumulator(ws) for ws in wrps)
-    wrp_acc = gen_squash_sys(wrps)
+    wrp_acc = gen_squash_sys(wrps, add_sys_errs=add_sys_errs)
     if sys_tup:
         for s, i in sys_tup:
             setattr(wrp_acc, s+'__sys', i)
@@ -513,7 +519,9 @@ import glob
 import os
 
 
-def resolve_file_pattern(pattern='./*.root'):
+####################################################################
+
+def resolve_file_pattern(pattern='./*.root', quiet_mode=False):
     """
     Resolves search pattern(s) for files.
 
@@ -523,19 +531,107 @@ def resolve_file_pattern(pattern='./*.root'):
     :returns:       List of filenames
     """
     def resolve_rel_pattern(pat):
+        res_pat = pat
         if pat.startswith('../'):
-            return os.path.join(analysis.cwd, pat)
-        else: return pat
+            res_pat = os.path.join(analysis.cwd, pat)
+        res_pat = glob.glob(res_pat)
+        if not res_pat:
+            res_pat = os.path.relpath(pat, analysis.cwd)
+            res_pat = glob.glob(res_pat)
+        return res_pat
 
     if isinstance(pattern, str):
         pattern = [pattern]
 
-    result = list(glob.glob(resolve_rel_pattern(pat)) for pat in pattern)
+    result = list(resolve_rel_pattern(pat) for pat in pattern)
     for pat, res in itertools.izip(pattern, result):
-        if not res or not all(os.path.isfile(f) for f in res):
-            raise RuntimeError('No file(s) found for pattern: %s' % pat)
+        if (not res or not all(os.path.isfile(f) for f in res)) and not quiet_mode:
+            monitor.message('generators.resolve_file_pattern',
+                'WARNING No file(s) found for pattern: %s' % pat)
 
     return list(itertools.chain.from_iterable(result))
+
+
+
+def dir_content(pattern='./*.root', lookup_aliases='aliases.in.*', result_name=None, quiet_mode=False):
+    """
+    Proxy of diskio.generate_aliases(directory) / tries to load aliases first
+
+    :yields:   Alias
+    """
+    def load_aliasses(path):
+        info_name = result_name or path.split('.')[-1]
+        rel_path = os.path.relpath(os.path.dirname(path), analysis.cwd)
+        info_path = os.path.join(rel_path, info_name)
+        wrps = pklio.get(info_path)
+        if not wrps:
+            with util.Switch(diskio, 'use_analysis_cwd', True):
+                wrps = diskio.get(info_path)
+        if not wrps:
+            with util.Switch(diskio, 'use_analysis_cwd', False):
+                wrps = diskio.get(info_path)
+        assert wrps, 'Error: nothing found at %s' % path
+        return wrps
+
+    def load_aliasses_for_pat(pattern):
+        dirname = os.path.dirname(pattern)
+        if not dirname.startswith('../'):
+            dirname = os.path.relpath(dirname, analysis.cwd)
+        paths = glob.glob(os.path.join(analysis.cwd, dirname, lookup_aliases))
+        try:
+            res = list(
+                w
+                for p in paths
+                for w in load_aliasses(p)
+            )
+        except TypeError:
+            res = list(load_aliasses(p) for p in paths)
+        return res
+
+    if isinstance(pattern, str):
+        pattern = [pattern]
+
+    wrps = []
+    # try to lookup aliases
+    if lookup_aliases:
+        wrps = list(
+            w
+            for pat in pattern
+            for w in load_aliasses_for_pat(pat)
+        )
+
+    # else generate them anew
+    if not wrps:
+        wrps = diskio.generate_aliases_list(resolve_file_pattern(pattern, quiet_mode))
+
+    return wrps
+
+####################################################################
+
+
+# def resolve_file_pattern(pattern='./*.root'):
+#     """
+#     Resolves search pattern(s) for files.
+
+#     Raises RuntimeError if no files could be found for a pattern.
+
+#     :param pattern: string or list of strings.
+#     :returns:       List of filenames
+#     """
+#     def resolve_rel_pattern(pat):
+#         if pat.startswith('../'):
+#             return os.path.join(analysis.cwd, pat)
+#         else: return pat
+
+#     if isinstance(pattern, str):
+#         pattern = [pattern]
+
+#     result = list(glob.glob(resolve_rel_pattern(pat)) for pat in pattern)
+#     for pat, res in itertools.izip(pattern, result):
+#         if not res or not all(os.path.isfile(f) for f in res):
+#             raise RuntimeError('No file(s) found for pattern: %s' % pat)
+
+#     return list(itertools.chain.from_iterable(result))
 
 
 def fs_content():
@@ -548,49 +644,49 @@ def fs_content():
         yield alias
 
 
-def dir_content(pattern='./*.root'):
-    """
-    Proxy of diskio.generate_aliases(directory) / tries to load aliases first
+# def dir_content(pattern='./*.root'):
+#     """
+#     Proxy of diskio.generate_aliases(directory) / tries to load aliases first
 
-    :yields:   Alias
-    """
-    def load_aliasses(path):
-        info_name = path.split('.')[-1]
-        rel_path = os.path.relpath(os.path.dirname(path), analysis.cwd)
-        info_path = os.path.join(rel_path, info_name)
-        wrps = pklio.get(info_path)
-        if not wrps:
-            with util.Switch(diskio, 'use_analysis_cwd', False):
-                wrps = diskio.get(info_path)
-        assert wrps, 'Error: nothing found at %s' % path
-        return wrps
+#     :yields:   Alias
+#     """
+#     def load_aliasses(path):
+#         info_name = path.split('.')[-1]
+#         rel_path = os.path.relpath(os.path.dirname(path), analysis.cwd)
+#         info_path = os.path.join(rel_path, info_name)
+#         wrps = pklio.get(info_path)
+#         if not wrps:
+#             with util.Switch(diskio, 'use_analysis_cwd', False):
+#                 wrps = diskio.get(info_path)
+#         assert wrps, 'Error: nothing found at %s' % path
+#         return wrps
 
-    def load_aliasses_for_pat(pattern):
-        dirname = os.path.dirname(pattern)
-        if not dirname.startswith('../'):
-            dirname = os.path.relpath(dirname, analysis.cwd)
-        paths = glob.glob(os.path.join(analysis.cwd, dirname, 'aliases.in.*'))
-        return (
-            w
-            for p in paths
-            for w in load_aliasses(p)
-        )
+#     def load_aliasses_for_pat(pattern):
+#         dirname = os.path.dirname(pattern)
+#         if not dirname.startswith('../'):
+#             dirname = os.path.relpath(dirname, analysis.cwd)
+#         paths = glob.glob(os.path.join(analysis.cwd, dirname, 'aliases.in.*'))
+#         return (
+#             w
+#             for p in paths
+#             for w in load_aliasses(p)
+#         )
 
-    if isinstance(pattern, str):
-        pattern = [pattern]
+#     if isinstance(pattern, str):
+#         pattern = [pattern]
 
-    # try to lookup aliases
-    wrps = list(
-        w
-        for pat in pattern
-        for w in load_aliasses_for_pat(pat)
-    )
+#     # try to lookup aliases
+#     wrps = list(
+#         w
+#         for pat in pattern
+#         for w in load_aliasses_for_pat(pat)
+#     )
 
-    # else generate them anew
-    if not wrps:
-        wrps = diskio.generate_aliases_list(resolve_file_pattern(pattern))
+#     # else generate them anew
+#     if not wrps:
+#         wrps = diskio.generate_aliases_list(resolve_file_pattern(pattern))
 
-    return wrps
+#     return wrps
 
 
 def load(aliases):
@@ -854,7 +950,9 @@ def sort_group_merge(wrps, keyfunc):
 
 def mc_stack_n_data_sum(wrps,
                         merge_mc_key_func=None,
-                        use_all_data_lumi=True):
+                        use_all_data_lumi=True,
+                        calc_sys_integral=False,
+                        add_sys_errs=False):
     """
     Stacks MC histos and merges data, input needs to be sorted and grouped.
 
@@ -893,15 +991,15 @@ def mc_stack_n_data_sum(wrps,
         bkg = group(bkg, merge_mc_key_func)
         bkg = (op.merge(g) for g in bkg)
         bkg = apply_fillcolor(bkg)
-        if settings.stack_line_color:
-            bkg = apply_linecolor(bkg, settings.stack_line_color)
+        # if settings.stack_line_color:
+        bkg = apply_linecolor(bkg, settings.stack_line_color)
         if data_lumi.float != 1.:
             bkg = gen_prod(itertools.izip(bkg, itertools.repeat(data_lumi)))
         try:
             if is_2d:
-                bkg_stk = gen_squash_sys_acc(bkg, op.sum)
+                bkg_stk = gen_squash_sys_acc(bkg, op.sum, calc_sys_integral, add_sys_errs=add_sys_errs)
             else:
-                bkg_stk = gen_squash_sys_acc(bkg, op.stack)
+                bkg_stk = gen_squash_sys_acc(bkg, op.stack, calc_sys_integral, add_sys_errs=add_sys_errs)
         except op.TooFewWrpsError:
             bkg_stk = None
             monitor.message('generators.mc_stack_n_data_sum',
@@ -912,9 +1010,9 @@ def mc_stack_n_data_sum(wrps,
         if any(s.sys_info for s in sig):
             sig = sorted(sig, key=lambda s: s.sample)
             sig = group(sig, lambda s: s.sample)
-            sig = (gen_squash_sys(s) for s in sig)
+            sig = (gen_squash_sys(s, add_sys_errs=add_sys_errs) for s in sig)
         sig = apply_linecolor(sig)
-        sig = apply_linewidth(sig)
+        sig = apply_linewidth(sig, settings.signal_linewidth)
         sig = list(sig)
         if not sig:
             monitor.message('generators.mc_stack_n_data_sum',

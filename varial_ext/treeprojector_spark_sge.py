@@ -22,7 +22,7 @@ sge_job_conf = """#!/bin/bash
 #$ -t 1-{num_sge_jobs}
 source /usr/share/Modules/init/sh
 export -f module
-JOBTMP=/scratch/tmp/$JOB_NAME.$JOB_ID
+JOBTMP=/tmp/$JOB_NAME.$JOB_ID
 echo "+++++++++" free -mh
 free -mh
 echo "+++++++++" $SPARK_HOME/bin/spark-class org.apache.spark.deploy.worker.Worker -d $JOBTMP -m 16G -c 4 $@

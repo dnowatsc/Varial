@@ -116,6 +116,8 @@ class Plotter(toolinterface.Tool):
             settings.canvas_post_build_funcs
             or rendering.post_build_funcs
         ),
+        'hook_canvas_post_build' : gen.add_sample_integrals,
+        'mod_log' : None
     }
 
     class NoFilterDictError(Exception):
@@ -164,6 +166,8 @@ class Plotter(toolinterface.Tool):
                 wrps = itertools.ifilter(self.filter_keyfunc, wrps)
         else:
             wrps = self.load_func(self.filter_keyfunc)
+        # wrps = list(wrps)
+        # print len(wrps)
         if self.hook_loaded_histos:
             wrps = self.hook_loaded_histos(wrps)
         self.stream_content = list(wrps)
@@ -197,7 +201,7 @@ class Plotter(toolinterface.Tool):
             self.stream_content,
             post_build_funcs=self.canvas_post_build_funcs,
         )
-        cnvs = gen.add_sample_integrals(cnvs)
+        cnvs = self.hook_canvas_post_build(cnvs)
         self.stream_content = cnvs
 
     def save_canvases(self):
@@ -206,7 +210,8 @@ class Plotter(toolinterface.Tool):
         self.stream_content = sparseio.bulk_write(
             self.stream_content,
             self.save_name_func,
-            linlog=(self.y_axis_scale == 'linlog')
+            linlog=(self.y_axis_scale == 'linlog'),
+            mod_log=self.mod_log
         )
         count = gen.consume_n_count(self.stream_content)
         level = "INFO" if count else "WARNING"
@@ -236,7 +241,7 @@ class RootFilePlotter(toolinterface.ToolChainParallel):
     :param name:                str, tool name
     """
     def _setup_aliases(self, pattern, filter_keyfunc):
-        aliases = gen.dir_content(pattern)
+        aliases = gen.dir_content(pattern, self.lookup_aliases, quiet_mode=self.quiet_mode)
         if not aliases:
             self.message('WARNING Could not create aliases for plotting.')
         else:
@@ -299,7 +304,7 @@ class RootFilePlotter(toolinterface.ToolChainParallel):
                 if not folder:
                     continue
                 if folder not in rfp.tool_names:
-                    rfp.add_tool(RootFilePlotter(None, None, plotter_factory, name=folder))
+                    rfp.add_tool(RootFilePlotter(None, None, plotter_factory, name=folder, n_workers=self.n_workers))
                 rfp = rfp.tool_names[folder]
 
             # This function creates a separate namespace for p
@@ -335,12 +340,18 @@ class RootFilePlotter(toolinterface.ToolChainParallel):
                  name=None,
                  filter_keyfunc=lambda w: True,
                  auto_legend=True,
-                 legendnames=None):
-        super(RootFilePlotter, self).__init__(name)
+                 lookup_aliases='aliases.in.*',
+                 legendnames=None,
+                 n_workers=None,
+                 quiet_mode=False):
+        super(RootFilePlotter, self).__init__(name, n_workers=n_workers)
+        self.n_workers = n_workers
+        self.quiet_mode = quiet_mode
 
         # initialization for all instances
         self._private_plotter = None
         self._is_base_instance = bool(pattern or input_result_path)
+        self.lookup_aliases = lookup_aliases
         if not self._is_base_instance:
             return
 
@@ -351,13 +362,29 @@ class RootFilePlotter(toolinterface.ToolChainParallel):
             plotter_factory = Plotter
 
         if input_result_path:
-            wrps = self.lookup_result(input_result_path)
-            if not wrps:
-                analysis.print_tool_tree()
-                raise RuntimeError(
-                    'no input found for input_result_path "%s". (Check tool tree above)'
-                    % input_result_path)
-            self.aliases = list(w for w in wrps if filter_keyfunc(w))
+            ##### OLD IMPLEMENTATION
+            if isinstance(input_result_path, str):
+                input_result_path = [input_result_path]
+            wrps = []
+            for i in input_result_path:
+                if i.startswith('..'):
+                    i = os.path.join(analysis.cwd, i)
+                wrps += list(self.lookup_result(p) for p in glob.glob(i))
+            # wrps = self.lookup_result(input_result_path)
+            # print list(type(w) for ws in wrps for w in ws)
+            self.aliases = []
+            for ws in wrps:
+                if ws:
+                    self.aliases += list(w for w in ws if filter_keyfunc(w))
+            # self.aliases = list(w for ws in wrps for w in ws if filter_keyfunc(w))
+            ##### NEW IMPLEMENTATION
+            # wrps = self.lookup_result(input_result_path)
+            # if not wrps:
+            #     analysis.print_tool_tree()
+            #     raise RuntimeError(
+            #         'no input found for input_result_path "%s". (Check tool tree above)'
+            #         % input_result_path)
+            # self.aliases = list(w for w in wrps if filter_keyfunc(w))
             load_func = lambda wrps: wrps  # histograms are already loaded
         else:
             self._setup_aliases(pattern, filter_keyfunc)
@@ -367,6 +394,7 @@ class RootFilePlotter(toolinterface.ToolChainParallel):
             gen_apply_legend = self._setup_gen_legend(pattern, legendnames)
         else:
             gen_apply_legend = lambda wrps: wrps
+
 
         if flat:
             # either print all in one dir

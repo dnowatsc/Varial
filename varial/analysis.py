@@ -16,6 +16,7 @@ cwd             str
 =============== ===============================================================
 """
 import os
+import glob
 
 
 ################################################################### samples ###
@@ -100,23 +101,24 @@ def get_color(sample_or_legend_name, samplename=None, default=0):
     return new_color
 
 
-def get_stack_position(wrp):
+def get_stack_position(wrp, stack_order=None):
     """Returns the stacking position (sortable str)"""
 
+    so = stack_order or settings.stacking_order
     def comparable_str(s):
         # reverse...
-        pos = len(settings.stacking_order) - settings.stacking_order.index(s)
+        pos = len(so) - so.index(s)
         # need comparable string that sorts before alpha chars
         return str(pos * 0.001)
 
-    if wrp.legend in settings.stacking_order:
+    if wrp.legend in so:
         res = comparable_str(wrp.legend)
 
-    elif wrp.sample in settings.stacking_order:
+    elif wrp.sample in so:
         res = comparable_str(wrp.sample)
 
     elif (wrp.sample in all_samples and
-          all_samples[wrp.sample].legend in settings.stacking_order):
+          all_samples[wrp.sample].legend in so):
         res = comparable_str(all_samples[wrp.sample].legend)
 
     else:
@@ -132,6 +134,7 @@ cwd = settings.varial_working_dir
 _tool_stack = []
 results_base = None
 current_result = None
+base_path = os.getcwd()
 
 
 def _mktooldir():
@@ -287,6 +290,31 @@ def lookup_tool(abs_path):
                 'lookup_tool: %s has no tool called %s' % (
                     tmp.name, tok))
     return tmp
+
+
+def lookup_filename(path, raise_on_empty_path=True):
+    # print 'self.cwd :' + self.cwd
+    # print 'analysis.cwd :' + cwd
+    # print 'os.getcwd() :' + os.getcwd()
+    # print 'analysis.base_path :' + base_path
+    # print 'path :' + path
+    # print os.path.join(cwd, path)
+    # print os.path.join(os.getcwd(), path)
+    # try to find path relative to tool path
+    if os.path.exists(os.path.join(cwd, path)) or glob.glob(os.path.join(cwd, path)):
+        return os.path.join(cwd, path)
+    # try to find from current position
+    elif os.path.exists(path) or glob.glob(path):
+        return path
+    # try to find from base path (but should be identical to current
+    # position - right?!)
+    # elif os.path.exists(os.path.join(base_path, path)):
+    #     return os.path.join(base_path, path)
+    elif raise_on_empty_path:
+        raise RuntimeError(
+            'ERROR The following path could not be found:%s'%
+            path)
+    return ''       
 
 
 def print_tool_tree():
