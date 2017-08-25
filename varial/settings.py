@@ -112,6 +112,7 @@ def apply_axis_style(obj, y_bounds):
     _, y_max = y_bounds
     obj.GetXaxis().SetNoExponent()
     obj.GetXaxis().SetLabelSize(0.052)
+    # if not isinstance(obj, ROOT.TH2):
     obj.SetMinimum(y_max / 10000.)
     obj.SetMaximum(y_max * 1.1)
 

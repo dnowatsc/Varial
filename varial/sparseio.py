@@ -12,6 +12,7 @@ Only generator modules are provided.
 from ROOT import TFile
 import cPickle
 import os
+import pprint
 
 import settings  # init ROOT first
 import analysis
@@ -30,6 +31,7 @@ def mod_log_def(wrp):
     if (hasattr(wrp, 'first_obj') and (not hasattr(wrp.first_obj, 'GetMaximum')
         or wrp.first_obj.GetMaximum() > 1e-9)
     ):
+        # pprint.pprint(wrp.__dict__)
         min_val = wrp.y_min_gr_0 * 0.5
         min_val = max(min_val, 1e-9)
         wrp.first_obj.SetMinimum(min_val)

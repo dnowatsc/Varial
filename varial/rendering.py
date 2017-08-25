@@ -78,7 +78,7 @@ class HistoRenderer(Renderer, wrappers.HistoWrapper):
             self.draw_option = 'colz'
         elif self.is_data or self.is_pseudo_data:
             self.draw_option = 'E0X0'
-            self.draw_option_legend = 'p'
+            self.draw_option_legend = 'pe'
             if self.is_pseudo_data:
                 w.histo.SetMarkerStyle(4)
         else:
@@ -117,7 +117,6 @@ class HistoRenderer(Renderer, wrappers.HistoWrapper):
         obj = getattr(self, 'graph_draw', self.histo)
         obj.Draw(self.draw_option + option)
 
-import pprint
 
 class StackRenderer(HistoRenderer, wrappers.StackWrapper):
     """
@@ -234,18 +233,26 @@ def setup(wrps, kws):
 
     # instanciate..
     rnds = list(_renderize_iter(wrps))
+
+    canvas_size_x = getattr(rnds[0], 'canvas_size_x', settings.canvas_size_x)
+    canvas_size_y = getattr(rnds[0], 'canvas_size_y', settings.canvas_size_y)
+    
+
     canvas = ROOT.TCanvas(
         rnds[0].name + '_' + util.random_hex_str(),
         rnds[0].title,
-        settings.canvas_size_x,
-        settings.canvas_size_y,
+        canvas_size_x,
+        canvas_size_y,
     )
 
-    # collect info
+    if hasattr(rnds[0], '_apply_pad_styles'):
+        apply_pad_styles = rnds[0]._apply_pad_styles
+        apply_pad_styles(canvas)
+
+
     info = rnds[0].all_info()  # TODO only common info
-    # for r in rnds[1:]:
-    #     info.update(r.all_info())
-    for attr in ('is_signal', 'is_data', 'is_pseudo_data'):
+
+    for attr in ('is_signal', 'is_data', 'is_pseudo_data', 'apply_pad_styles'):
         if attr in info:
             del info[attr]
     info.update(kws)
@@ -264,6 +271,10 @@ def setup(wrps, kws):
         'has_data'    : any(r.is_data for r in rnds),
         '_renderers'  : rnds,
     })
+
+    # collect info
+    # for r in rnds[1:]:
+    #     info.update(r.all_info())
     wrp = wrappers.CanvasWrapper(canvas, **info)
 
     for sf in pbfs:
@@ -291,7 +302,8 @@ def draw_content(wrp, _):
             first_obj = rnd.obj
             first_obj.SetTitle('')
             rnd.draw('')
-            settings.apply_axis_style(first_obj, wrp.y_bounds)
+            apply_axis_style = getattr(wrp, '_apply_axis_style', settings.apply_axis_style)
+            apply_axis_style(first_obj, wrp.y_bounds)
             wrp.first_obj = first_obj
         else:
             rnd.draw('same')
@@ -380,6 +392,8 @@ def mk_legend_func(**outer_kws):
         for entry in legend.GetListOfPrimitives():
             obj = entry.GetObject()
             label = entry.GetLabel()
+            if label == 'dummy':
+                continue
             draw_opt = par['opt']
             for rnd in rnds:
 
@@ -392,8 +406,10 @@ def mk_legend_func(**outer_kws):
 
                 if rnd.is_data:
                     draw_opt = par['opt_data']
-                else:
+                elif 'TH2' not in rnd.type:
                     draw_opt = 'l'
+                else:
+                    draw_opt = ''
 
                 if hasattr(rnd, 'legend'):
                     label = rnd.legend
@@ -428,15 +444,23 @@ def mk_legend_func(**outer_kws):
         par = dict(settings.defaults_Legend)
         par.update(outer_kws)
         par.update(kws)
-        if hasattr(wrp, 'legend_settings'):
-            par.update(wrp.legend_settings)
+        if hasattr(wrp, '_legend_settings'):
+            par.update(wrp._legend_settings)
 
         # get legend entry objects
         tmp_leg = wrp.main_pad.BuildLegend(0.1, 0.6, 0.5, 0.8)
         entries = make_entry_tupels(wrp._renderers, tmp_leg, par)
+        if par.get('sort_legend', None):
+            sort_func = par['sort_legend']
+            entries = sorted(entries, key=lambda w: sort_func(w[1]))
+        if par.get('mod_legend', None):
+            mod_func = par['mod_legend']
+            entries = mod_func(entries)
         tmp_leg.Clear()
         wrp.main_pad.GetListOfPrimitives().Remove(tmp_leg)
         tmp_leg.Delete()
+        if not entries:
+            return wrp
 
         # create a new legend
         bounds = calc_bounds(len(entries), par)

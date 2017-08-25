@@ -5,6 +5,7 @@ Tools connected to the use of (La)Tex.
 import shutil
 import os
 import time
+import pprint
 
 from varial.toolinterface import Tool
 
@@ -74,7 +75,8 @@ class TexContent(Tool):
                 continue
 
             hashified_and_path = list(
-                (self._hashified_filename(bf), bf) for bf in blockfiles
+                (self._hashified_filename(bf), self.lookup_filename(bf, raise_on_empty_path=False)) for bf in blockfiles
+                if self.lookup_filename(bf, raise_on_empty_path=False)
             )
 
             # make block file
@@ -100,11 +102,12 @@ class TexContent(Tool):
                     f.write(self.include_str % inc_dest + '\n')
 
     def copy_plain_files(self):
-        for fname, path, in self.tex_files.iteritems():
-            if not os.path.exists(path):
+        tex_dict = self.tex_files() if callable(self.tex_files) else self.tex_files
+        for fname, path in tex_dict.iteritems():
+            if not self.lookup_filename(path, raise_on_empty_path=False):
                 self.message('WARNING file %s does not exist' % path)
                 continue
-            shutil.copy(path, self._join(fname))
+            shutil.copy(self.lookup_filename(path, raise_on_empty_path=False), self._join(fname))
 
     def run(self):
         self.initialize()

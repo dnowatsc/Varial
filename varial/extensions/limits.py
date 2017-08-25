@@ -45,7 +45,7 @@ def add_th_curve(grps, th_x, th_y, legend='Theory', min_thy=None, max_thy=None):
         y_arr=array('f', th_y)
         th_graph = ROOT.TGraph(len(x_arr), x_arr, y_arr)
         th_graph.SetLineStyle(2)
-        th_graph.SetLineColor(1)
+        # th_graph.SetLineColor(2)
         th_graph.SetLineWidth(2)
         min_log_y = min_thy or min(th_y)
         th_graph.GetXaxis().SetNdivisions(510, ROOT.kTRUE)
@@ -128,7 +128,7 @@ class ThetaLimitsBase(varial.tools.Tool):
 
             options = theta_auto.Options()
             options.set('minimizer', 'strategy', 'robust')
-            options.set('minimizer', 'minuit_tolerance_factor', '100')
+            options.set('minimizer', 'minuit_tolerance_factor', '1000')
 
             # get model and let the fit run
             self.model = self.model_func(self.hist_name)
@@ -163,7 +163,11 @@ class ThetaLimitsBase(varial.tools.Tool):
             # shout it out loud            # theta_auto.write_histograms_to_rootfile(histos, 'histos-mle.root')
 
             summary = theta_auto.model_summary(self.model)
-            theta_auto.config.report.write_html('result')
+            try:
+                theta_auto.config.report.write_html('result')
+            except IOError as e:
+                self.message('WARNING error from theta: %s' % str(e.args))
+                
 
         except (IndexError, RuntimeError) as e:
             self.message('WARNING Error occured during theta run: %s' % e)
@@ -416,10 +420,15 @@ class ThetaPostFitPlot(varial.tools.Tool):
 
     @staticmethod
     def prepare_post_fit_items(post_fit_dict):
+        post_fit_dict.pop('__chi2', None)
+        post_fit_dict.pop('__ks', None)
+        post_fit_dict.pop('__cov', None)
+        post_fit_dict.pop('__nll', None)
+        # pprint.pprint(post_fit_dict)
         return list(
             (name, val_err)
             for name, (val_err,) in sorted(post_fit_dict.iteritems())
-            if name not in ('__nll', '__cov')
+            # if name not in ('__nll', '__cov', '__ks', '__chi2')
         )
 
     @staticmethod
@@ -452,9 +461,9 @@ class ThetaPostFitPlot(varial.tools.Tool):
         return g68, g95
 
     @staticmethod
-    def prepare_canvas(name):
+    def prepare_canvas(name, post_fit_items):
         c_name = 'cnv_post_fit_' + name
-        c = ROOT.TCanvas(c_name, c_name, 720, 930)
+        c = ROOT.TCanvas(c_name, c_name, 720, len(post_fit_items)*38)
         c.SetTopMargin(0.06)
         c.SetRightMargin(0.02)
         c.SetBottomMargin(0.12)
@@ -470,9 +479,10 @@ class ThetaPostFitPlot(varial.tools.Tool):
         ax_2 = prim_hist.GetXaxis()
 
         prim_graph.SetTitle('')
-        ax_2.SetTitle('post-fit nuisance parameters values')
-        #ax_2.SetTitle('deviation in units of #sigma')
-        ax_1.SetTitleSize(0.050)
+        ax_2.SetTitle('Post-fit values')
+        ax_2.CenterTitle()
+        #ax_2.SetTitle('deviation in units of std. dev.')
+        ax_1.SetTitleSize(0.040)
         ax_2.SetTitleSize(0.050)
         ax_1.SetTitleOffset(1.4)
         ax_2.SetTitleOffset(1.0)
@@ -492,7 +502,7 @@ class ThetaPostFitPlot(varial.tools.Tool):
 
         g = self.prepare_pull_graph(n, items)
         g68, g95 = self.prepare_band_graphs(n)
-        cnv = self.prepare_canvas(sig_name)
+        cnv = self.prepare_canvas(sig_name, items)
 
         cnv.cd()
         g95.Draw('AF')
@@ -510,11 +520,15 @@ class ThetaPostFitPlot(varial.tools.Tool):
     def run(self):
         theta_res = self.lookup_result(self.input_path)
         postfit_vals = cPickle.loads(theta_res.postfit_vals)
+        # pprint.pprint(postfit_vals)
         cnvs = (self.mk_canvas(sig, pfd)
                 for sig, pfd in postfit_vals.iteritems())
 
         cnvs = varial.sparseio.bulk_write(cnvs, lambda c: c.name)
         self.result = list(cnvs)
+
+
+
 
 ################################################## plot correlation matrix ###
 
@@ -534,9 +548,10 @@ class CorrelationMatrix(varial.tools.Tool):
 
     def run(self):
         theta_res = self.lookup_result(self.input_path)
+        # pprint.pprint(theta_res)
         postfit_vals = cPickle.loads(theta_res.postfit_vals)
         if not postfit_vals.get(self.proc_name, None):
-            self.message('WARNING process not in in postfit_vals')
+            self.message('WARNING process %s not in in postfit_vals' % self.proc_name)
             return
         if not postfit_vals[self.proc_name].get('__cov', None):
             self.message('WARNING no covariance matrix in postfit_vals')
@@ -551,7 +566,7 @@ class CorrelationMatrix(varial.tools.Tool):
         theta_res = postfit_vals[self.proc_name]
         param_list = []
         for k, res in theta_res.iteritems():
-            if any(k == i for i in ['__nll', '__cov']):
+            if any(k == i for i in ['__nll', '__cov', '__ks', '__chi2']):
                 continue
             err_sq = res[0][1]*res[0][1]
             param_list.append((k, err_sq))
@@ -593,10 +608,6 @@ class CorrelationMatrix(varial.tools.Tool):
                 eigvec_hist.GetYaxis().SetBinLabel(i+1, varial.analysis.get_pretty_name(ind_dict.get(i, 'unknown')))
                 eigval_hist.GetXaxis().SetBinLabel(i+1, varial.analysis.get_pretty_name(ind_dict.get(i, 'unknown'))+"'")
                 eigval_hist.GetYaxis().SetBinLabel(i+1, varial.analysis.get_pretty_name(ind_dict.get(i, 'unknown'))+"'")
-                corr_hist.SetLabelSize(0.03, 'x')
-                cov_hist.SetLabelSize(0.03, 'x')
-                eigvec_hist.SetLabelSize(0.03, 'x')
-                eigval_hist.SetLabelSize(0.03, 'x')
                 for ii in xrange(corr_matrix.shape[1]):
                     entry_corr = corr_matrix[i,ii]
                     entry_cov = cov_matrix[i,ii]
@@ -607,6 +618,13 @@ class CorrelationMatrix(varial.tools.Tool):
                     if i == ii:
                         entry_eigval = eigval[i]
                         eigval_hist.Fill(i, ii, entry_eigval)
+
+            corr_hist.SetLabelSize(0.03, 'x')
+            cov_hist.SetLabelSize(0.03, 'x')
+            eigvec_hist.SetLabelSize(0.03, 'x')
+            eigval_hist.SetLabelSize(0.03, 'x')
+            corr_hist.SetMinimum(-1)
+            corr_hist.SetMaximum(1)
 
 
 
@@ -627,7 +645,6 @@ class CorrelationMatrix(varial.tools.Tool):
 
         # cnvs = varial.sparseio.bulk_write(cnvs, lambda c: c.name)
         # self.result = list(cnvs)
-
 
 ######################################################### plot limit graphs ###
 # class LimitGraphs(varial.tools.Tool):
@@ -663,10 +680,10 @@ class CorrelationMatrix(varial.tools.Tool):
 #             sigma_band_high)
 #         if sigma_ind == 1:
 #             sigma_graph.SetFillColor(ROOT.kYellow)
-#             legend='#pm 2 #sigma Expected '+selection
+#             legend='#pm 95% expected '+selection
 #         else:
 #             sigma_graph.SetFillColor(ROOT.kGreen)
-#             legend='#pm 1 #sigma Expected '+selection
+#             legend='#pm 68% expected '+selection
 #         sigma_graph.SetTitle(legend)
 #         sigma_graph.GetXaxis().SetNdivisions(510, ROOT.kTRUE)
 
@@ -719,7 +736,7 @@ class CorrelationMatrix(varial.tools.Tool):
 #                 assert len(x)==1 and len(y)==1, 'Not exactly one mass point in limit wrapper!'
 #                 x_list.append(x[0])
 #                 y_list.append(y[0])
-#         lim_wrapper = self.make_graph(x_list, y_list, color, 3, 'Expected', selection)
+#         lim_wrapper = self.make_graph(x_list, y_list, color, 3, 'expected', selection)
 #         setattr(lim_wrapper, 'is_exp', True)
 #         if hasattr(wrp, 'brs'):
 #             setattr(lim_wrapper, 'save_name', 'tH%.0ftZ%.0fbW%.0f'\
@@ -750,7 +767,7 @@ class CorrelationMatrix(varial.tools.Tool):
 #                 assert len(x)==1 and len(y)==1, 'Not exactly one mass point in limit wrapper!'
 #                 x_list.append(x[0])
 #                 y_list.append(y[0])
-#         lim_wrapper = self.make_graph(x_list, y_list, color, 1, 'Observed', selection)
+#         lim_wrapper = self.make_graph(x_list, y_list, color, 1, 'observed', selection)
 #         setattr(lim_wrapper, 'is_obs', True)
 #         if hasattr(wrp, 'brs'):
 #             setattr(lim_wrapper, 'save_name', 'tH%.0ftZ%.0fbW%.0f'\
@@ -848,7 +865,7 @@ class LimitGraphsNew(varial.tools.Tool):
         self.hook_loaded_graphs = hook_loaded_graphs
         self.group_graphs = group_graphs
         self.setup_graphs = setup_graphs
-        self.get_lim_params = self.get_lims_mass_split if split_mass else self.get_lims_mass_comb
+        self.get_lim_params = self.get_lims_mass_split(plot_obs) if split_mass else self.get_lims_mass_comb(plot_obs)
         if get_lim_params:
             self.get_lim_params = get_lim_params
         self.plot_obs = plot_obs
@@ -857,51 +874,61 @@ class LimitGraphsNew(varial.tools.Tool):
         self.axis_labels = axis_labels
 
     @staticmethod
-    def get_lims_mass_comb(grp):
-        wrp = grp[0]
-        theta_res_exp = cPickle.loads(wrp.res_exp)
-        theta_res_obs = cPickle.loads(wrp.res_obs)
-        if not theta_res_exp:
-            self.message('ERROR Theta result empty.')
-            raise RuntimeError  
-        x_list = theta_res_exp.x
-        y_exp_list = theta_res_exp.y
-        y_obs_list = theta_res_obs.y
-        sigma1_band_low = theta_res_exp.bands[1][0]
-        sigma2_band_low = theta_res_exp.bands[0][0]
-        sigma1_band_high = theta_res_exp.bands[1][1]
-        sigma2_band_high = theta_res_exp.bands[0][1]
-        return x_list, y_exp_list, y_obs_list, sigma1_band_low, sigma1_band_high, sigma2_band_low, sigma2_band_high
+    def get_lims_mass_comb(plot_obs=True):
+        def tmp(grp):
+            wrp = grp[0]
+            theta_res_exp = cPickle.loads(wrp.res_exp)
+            if not theta_res_exp:
+                self.message('ERROR Theta result empty.')
+                raise RuntimeError  
+            x_list = theta_res_exp.x
+            y_exp_list = theta_res_exp.y
+            if plot_obs:
+                theta_res_obs = cPickle.loads(wrp.res_obs)
+                y_obs_list = theta_res_obs.y
+            else:
+                y_obs_list = None
+            sigma1_band_low = theta_res_exp.bands[1][0]
+            sigma2_band_low = theta_res_exp.bands[0][0]
+            sigma1_band_high = theta_res_exp.bands[1][1]
+            sigma2_band_high = theta_res_exp.bands[0][1]
+            return x_list, y_exp_list, y_obs_list, sigma1_band_low, sigma1_band_high, sigma2_band_low, sigma2_band_high
+        return tmp
 
     @staticmethod
-    def get_lims_mass_split(grp):
-        val_tup_list = []
-        wrps = grp.wrps
-        for wrp in wrps:
-            theta_res_exp = cPickle.loads(wrp.res_exp)
-            theta_res_obs = cPickle.loads(wrp.res_obs)
-            if not theta_res_exp:
-                continue
-            x = theta_res_exp.x
-            y_exp = theta_res_exp.y
-            y_obs = theta_res_obs.y
-            sigma1_low = theta_res_exp.bands[1][0]
-            sigma2_low = theta_res_exp.bands[0][0]
-            sigma1_high = theta_res_exp.bands[1][1]
-            sigma2_high = theta_res_exp.bands[0][1]
-            if not (len(x)==1 and len(sigma1_low)==1 and len(sigma1_high)==1 and len(sigma2_low)==1 and len(sigma2_high)==1):
-                monitor.message('limits.get_lims_mass_split', 'WARNING Not exactly one mass point in limit wrapper! ' +\
-                    'Length of x/sigma1_low/sigma1_high/sigma2_low/sigma2_high: %s/%s/%s/%s/%s' % (str(len(x)), str(len(sigma1_low)), str(len(sigma1_high)), str(len(sigma2_low)), str(len(sigma2_high))))
-            val_tup_list.append((x[0], y_exp[0], y_obs[0], sigma1_low[0], sigma2_low[0], sigma1_high[0], sigma2_high[0]))
-        val_tup_list = sorted(val_tup_list, key=lambda w: w[0])
-        x_list = list(w[0] for w in val_tup_list)
-        y_exp_list = list(w[1] for w in val_tup_list)
-        y_obs_list = list(w[2] for w in val_tup_list)
-        sigma1_band_low = list(w[3] for w in val_tup_list)
-        sigma2_band_low = list(w[4] for w in val_tup_list)
-        sigma1_band_high = list(w[5] for w in val_tup_list)
-        sigma2_band_high = list(w[6] for w in val_tup_list)
-        return x_list, y_exp_list, y_obs_list, sigma1_band_low, sigma1_band_high, sigma2_band_low, sigma2_band_high
+    def get_lims_mass_split(plot_obs=True):
+        def tmp(grp):
+            val_tup_list = []
+            wrps = grp.wrps
+            for wrp in wrps:
+                theta_res_exp = cPickle.loads(wrp.res_exp)
+                if not theta_res_exp:
+                    continue
+                x = theta_res_exp.x
+                y_exp = theta_res_exp.y
+                if plot_obs:
+                    theta_res_obs = cPickle.loads(wrp.res_obs)
+                    y_obs = theta_res_obs.y[0]
+                else:
+                    y_obs = None
+                sigma1_low = theta_res_exp.bands[1][0]
+                sigma2_low = theta_res_exp.bands[0][0]
+                sigma1_high = theta_res_exp.bands[1][1]
+                sigma2_high = theta_res_exp.bands[0][1]
+                if not (len(x)==1 and len(sigma1_low)==1 and len(sigma1_high)==1 and len(sigma2_low)==1 and len(sigma2_high)==1):
+                    monitor.message('limits.get_lims_mass_split', 'WARNING Not exactly one mass point in limit wrapper! ' +\
+                        'Length of x/sigma1_low/sigma1_high/sigma2_low/sigma2_high: %s/%s/%s/%s/%s' % (str(len(x)), str(len(sigma1_low)), str(len(sigma1_high)), str(len(sigma2_low)), str(len(sigma2_high))))
+                val_tup_list.append((x[0], y_exp[0], y_obs, sigma1_low[0], sigma2_low[0], sigma1_high[0], sigma2_high[0]))
+            val_tup_list = sorted(val_tup_list, key=lambda w: w[0])
+            x_list = list(w[0] for w in val_tup_list)
+            y_exp_list = list(w[1] for w in val_tup_list)
+            y_obs_list = list(w[2] for w in val_tup_list)
+            sigma1_band_low = list(w[3] for w in val_tup_list)
+            sigma2_band_low = list(w[4] for w in val_tup_list)
+            sigma1_band_high = list(w[5] for w in val_tup_list)
+            sigma2_band_high = list(w[6] for w in val_tup_list)
+            return x_list, y_exp_list, y_obs_list, sigma1_band_low, sigma1_band_high, sigma2_band_low, sigma2_band_high
+        return tmp
 
     def prepare_sigma_band_graph(self, x_list, sig_low, sig_high):
         n_items = len(x_list)
@@ -919,10 +946,10 @@ class LimitGraphsNew(varial.tools.Tool):
             sigma_band_high)
         if sigma_ind == 1:
             sigma_graph.SetFillColor(ROOT.kYellow)
-            legend='#pm 2 #sigma Expected'
+            legend='#pm 95% expected'
         else:
             sigma_graph.SetFillColor(ROOT.kGreen)
-            legend='#pm 1 #sigma Expected'
+            legend='#pm 68% expected'
         sigma_graph.SetTitle(legend)
         sigma_graph.GetXaxis().SetNdivisions(510, ROOT.kTRUE)
 
@@ -932,7 +959,8 @@ class LimitGraphsNew(varial.tools.Tool):
             val_y_min=min(sigma_band_low),
             val_y_max=max(sigma_band_low)*10,
             legend=legend,
-            save_name='lim_graph'
+            save_name='lim_graph',
+            file_path=self.cwd
         )
         lim_wrapper.__dict__.update(kws)
         return lim_wrapper
@@ -947,11 +975,12 @@ class LimitGraphsNew(varial.tools.Tool):
         lim_graph.SetLineStyle(line_style)
         lim_graph.GetXaxis().SetNdivisions(510, ROOT.kTRUE)
         lim_wrapper = varial.wrappers.GraphWrapper(lim_graph,
-            legend=lim_type+' 95% CL',
+            legend=lim_type,
             draw_option='L',
             val_y_min=min(y_list),
             val_y_max=max(y_list)*10,
-            save_name='lim_graph'
+            save_name='lim_graph',
+            file_path=self.cwd
         )
         lim_wrapper.__dict__.update(kws)
         return lim_wrapper
@@ -992,9 +1021,9 @@ class LimitGraphsNew(varial.tools.Tool):
                 list_graphs.append(self.make_sigma_band_graph(x_list, sigma1_band_low, sigma1_band_high, 2, **args))
             exp_col = args.pop('color', ROOT.kBlack)
             exp_style = args.pop('line_style', 3)
-            list_graphs.append(self.make_graph(x_list, y_exp_list, exp_col, exp_style, 'Expected', **args))
+            list_graphs.append(self.make_graph(x_list, y_exp_list, exp_col, exp_style, 'Expected 95% CL', **args))
             if self.plot_obs and y_obs_list:
-                list_graphs.append(self.make_graph(x_list, y_obs_list, ROOT.kBlack, 1, 'Observed', **args))
+                list_graphs.append(self.make_graph(x_list, y_obs_list, ROOT.kBlack, 1, 'Observed 95% CL', **args))
 
         list_graphs[0].draw_option += 'A'
 
@@ -1005,3 +1034,58 @@ class LimitGraphsNew(varial.tools.Tool):
 
         self.result = varial.wrp.WrapperWrapper(list_graphs)
 
+
+
+
+################################################## plot GOF tests ###
+class ThetaGOFPlots(varial.tools.Tool):
+    io = varial.pklio
+
+    def __init__(
+        self,
+        input_path_data='../ThetaLimit',
+        input_path_toys='../ThetaLimitToys',
+        signal_name='',
+        name=None,
+    ):
+        super(ThetaGOFPlots, self).__init__(name)
+        self.input_path_data = input_path_data
+        self.input_path_toys = input_path_toys
+        self.signal_name = signal_name
+
+
+    def run(self):
+        theta_res_data = self.lookup_result(self.input_path_data)
+        theta_res_toys = self.lookup_result(self.input_path_toys)
+        postfit_vals_data = cPickle.loads(theta_res_data.postfit_vals)[self.signal_name]
+        postfit_vals_toys = cPickle.loads(theta_res_toys.postfit_vals)[self.signal_name]
+        ks_data = postfit_vals_data['__ks']
+        chi2_data = postfit_vals_data['__chi2']
+        ks_toys = postfit_vals_toys['__ks']
+        chi2_toys = postfit_vals_toys['__chi2']
+
+        # print ks_data
+        # print ks_toys
+        # print chi2_data
+        # print chi2_toys
+        ks_hist = ROOT.TH1F("toy_values_ks", "", int(max(ks_toys)*1.05), 0, int(max(ks_toys)*1.05))
+        chi2_hist = ROOT.TH1F("toy_values_chi2", "", int(max(chi2_toys)*1.05), 0, int(max(chi2_toys)*1.05))
+
+        for i in ks_toys:
+            ks_hist.Fill(i)
+        for i in chi2_toys:
+            chi2_hist.Fill(i)
+
+        # ks_graph.SetPoint(0, ks_data[0], 0)
+        # ks_graph.SetPoint(1, ks_data[0], ks_hist.GetXaxis().GetXmax())
+        # chi2_graph.SetPoint(0, chi2_data[0], 0)
+        # chi2_graph.SetPoint(1, chi2_data[0], chi2_hist.GetXaxis().GetXmax())
+
+        self.result = [varial.wrappers.HistoWrapper(ks_hist, legend='Toys', save_name='ks_hist', gof_data=ks_data[0], x_label='K.-S. Test Statistic'), 
+                       varial.wrappers.HistoWrapper(chi2_hist, legend='Toys', save_name='chi2_hist', gof_data=chi2_data[0], x_label='#chi^{2} Test Statistic'),
+                        ]
+        # cnvs = (self.mk_canvas(sig, pfd)
+        #         for sig, pfd in postfit_vals.iteritems())
+
+        # cnvs = varial.sparseio.bulk_write(cnvs, lambda c: c.name)
+        # self.result = list(cnvs)
